@@ -14,13 +14,47 @@
 package schedule
 
 import (
+	"github.com/pingcap/pd/v4/server/schedule/opt"
 	"path/filepath"
 	"plugin"
 	"sync"
+	"time"
 
 	"github.com/pingcap/log"
 	"go.uber.org/zap"
 )
+
+// ScheduleOperationList 是存放所有调度的信息的列表，即调度计划
+var OpList []MoveRegionOp
+
+// ScheduleListLock 是操作 ScheduleOperationList 时要上的锁
+var OpListLock = sync.RWMutex{}
+
+// Schedule_MoveRegion 是一次调度Region的操作
+type MoveRegionOp struct {
+	RegionIDs []uint64
+	StoreIDs  []uint64
+	StartTime time.Time
+	EndTime   time.Time
+}
+
+// IsPredictedHotRegion 判断该region是否已在调度计划-OpList
+// 这个函数是留给其他调度器（如balance_leader.go）执行的
+func IsPredictedHotRegion(cluster opt.Cluster, regionID uint64) bool {
+	for _, oneScheduleOperation := range OpList {
+		currentTime := time.Now()
+		if currentTime.After(oneScheduleOperation.EndTime) || currentTime.Before(oneScheduleOperation.StartTime) {
+			continue
+		}
+		for _, id := range oneScheduleOperation.RegionIDs {
+			if id == regionID {
+				log.Info("region is predicted hot", zap.Uint64("region-id", regionID))
+				return true
+			}
+		}
+	}
+	return false
+}
 
 // PluginInterface is used to manage all plugin.
 type PluginInterface struct {

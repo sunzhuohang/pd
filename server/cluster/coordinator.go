@@ -264,36 +264,91 @@ func (c *coordinator) run() {
 }
 
 // LoadPlugin load user plugin
+// denghejian
 func (c *coordinator) LoadPlugin(pluginPath string, ch chan string) {
 	log.Info("load plugin", zap.String("plugin-path", pluginPath))
-	// get func: SchedulerType from plugin
-	SchedulerType, err := c.pluginInterface.GetFunction(pluginPath, "SchedulerType")
+
+	// FIXME 这里没有选择使用官方的方法去获取 SchedulerType 和 SchedulerArgs
+	//// get func: SchedulerType from plugin
+	//SchedulerType, err := c.pluginInterface.GetFunction(pluginPath, "SchedulerType")
+	//if err != nil {
+	//	log.Error("GetFunction SchedulerType error", zap.Error(err))
+	//	return
+	//}
+	//schedulerType := SchedulerType.(func() string)
+	//// get func: SchedulerArgs from plugin
+	//SchedulerArgs, err := c.pluginInterface.GetFunction(pluginPath, "SchedulerArgs")
+	//if err != nil {
+	//	log.Error("GetFunction SchedulerArgs error", zap.Error(err))
+	//	return
+	//}
+	//schedulerArgs := SchedulerArgs.(func() []string)
+
+	// FIXME 还是沿用dc的写法，使用自己写的 CreateUserScheduler
+	//// create and add user scheduler
+	//s, err := schedule.CreateScheduler(schedulerType(), c.opController, c.cluster.storage, schedule.ConfigSliceDecoder(schedulerType(), schedulerArgs()))
+	//if err != nil {
+	//	log.Error("can not create scheduler", zap.String("scheduler-type", schedulerType()), zap.Error(err))
+	//	return
+	//}
+	//log.Info("create scheduler", zap.String("scheduler-name", s.GetName()))
+	//if err = c.addScheduler(s); err != nil {
+	//	log.Error("can't add scheduler", zap.String("scheduler-name", s.GetName()), zap.Error(err))
+	//	return
+	//}
+
+	// denghejian add
+	// func1 : ProcessPredictInfo()
+	func1, err := c.pluginInterface.GetFunction(pluginPath, "ProcessPredictInfo")
 	if err != nil {
-		log.Error("GetFunction SchedulerType error", zap.Error(err))
+		log.Error("GetFunction err", zap.Error(err))
 		return
 	}
-	schedulerType := SchedulerType.(func() string)
-	// get func: SchedulerArgs from plugin
-	SchedulerArgs, err := c.pluginInterface.GetFunction(pluginPath, "SchedulerArgs")
+	ProcessPredictInfo := func1.(func(*RaftCluster, chan int))
+
+	// func2 : CreateUserScheduler()
+	// TODO 这里dc使用的是自己的 Scheduler 创建器
+	func2, err := c.pluginInterface.GetFunction(pluginPath, "CreateUserScheduler")
 	if err != nil {
-		log.Error("GetFunction SchedulerArgs error", zap.Error(err))
+		log.Error("GetFunction err", zap.Error(err))
 		return
 	}
-	schedulerArgs := SchedulerArgs.(func() []string)
-	// create and add user scheduler
-	s, err := schedule.CreateScheduler(schedulerType(), c.opController, c.cluster.storage, schedule.ConfigSliceDecoder(schedulerType(), schedulerArgs()))
-	if err != nil {
-		log.Error("can not create scheduler", zap.String("scheduler-type", schedulerType()), zap.Error(err))
-		return
-	}
-	log.Info("create scheduler", zap.String("scheduler-name", s.GetName()))
-	if err = c.addScheduler(s); err != nil {
-		log.Error("can't add scheduler", zap.String("scheduler-name", s.GetName()), zap.Error(err))
-		return
+	CreateUserScheduler := func2.(func(*schedule.OperatorController, opt.Cluster) []schedule.Scheduler)
+	schedulers := CreateUserScheduler(c.opController, c.cluster)
+	for _, s := range schedulers {
+		if err := c.addUserScheduler(s); err != nil {
+			log.Error("can not add scheduler", zap.String("scheduler-name", s.GetName()), zap.Error(err))
+		}
 	}
 
-	c.wg.Add(1)
-	go c.waitPluginUnload(pluginPath, s.GetName(), ch)
+	ch2 := make(chan int)
+	c.wg.Add(2)
+	go ProcessPredictInfo(c.cluster, ch2)
+	go c.updateUserScheduler(CreateUserScheduler, ch2)
+
+	//c.wg.Add(1)
+	//go c.waitPluginUnload(pluginPath, s.GetName(), ch)
+}
+
+// FIXME denghejian add
+func (c *coordinator) updateUserScheduler(CreateUserScheduler func(*schedule.OperatorController, opt.Cluster) []schedule.Scheduler, ch chan int) {
+	defer logutil.LogPanic()
+	defer c.wg.Done()
+	for {
+		select {
+		case <-ch:
+			log.Info("scheduleInfo changed")
+			schedulers := CreateUserScheduler(c.opController, c.cluster)
+			for _, s := range schedulers {
+				if err := c.addUserScheduler(s); err != nil {
+					log.Error("can not add scheduler", zap.String("scheduler-name", s.GetName()), zap.Error(err))
+				}
+			}
+		case <-c.ctx.Done():
+			log.Info("load plugin has been stopped")
+			return
+		}
+	}
 }
 
 func (c *coordinator) waitPluginUnload(pluginPath, schedulerName string, ch chan string) {
@@ -473,6 +528,33 @@ func (c *coordinator) addScheduler(scheduler schedule.Scheduler, args ...string)
 	c.schedulers[s.GetName()] = s
 	c.cluster.opt.AddSchedulerCfg(s.GetType(), args)
 	c.cluster.schedulersCallback()
+
+	return nil
+}
+
+func (c *coordinator) addUserScheduler(scheduler schedule.Scheduler, args ...string) error {
+	c.RLock()
+	if _, ok := c.schedulers[scheduler.GetName()]; ok {
+		c.RUnlock()
+		if err := c.removeScheduler(scheduler.GetName()); err != nil {
+			log.Error("can not remove scheduler", zap.String("scheduler-name", scheduler.GetName()), zap.Error(err))
+		}
+	} else {
+		c.RUnlock()
+	}
+
+	c.Lock()
+	defer c.Unlock()
+
+	s := newScheduleController(c, scheduler)
+	if err := s.Prepare(c.cluster); err != nil {
+		return err
+	}
+
+	c.wg.Add(1)
+	go c.runScheduler(s)
+	c.schedulers[s.GetName()] = s
+	c.cluster.opt.AddSchedulerCfg(s.GetType(), args)
 
 	return nil
 }

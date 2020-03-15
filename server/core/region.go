@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"time"
 	"unsafe"
 
 	"github.com/gogo/protobuf/proto"
@@ -29,19 +30,31 @@ import (
 // RegionInfo records detail region info.
 // Read-Only once created.
 type RegionInfo struct {
-	meta            *metapb.Region
-	learners        []*metapb.Peer
-	voters          []*metapb.Peer
-	leader          *metapb.Peer
-	downPeers       []*pdpb.PeerStats
-	pendingPeers    []*metapb.Peer
-	writtenBytes    uint64
-	writtenKeys     uint64
-	readBytes       uint64
-	readKeys        uint64
+	meta         *metapb.Region
+	learners     []*metapb.Peer
+	voters       []*metapb.Peer
+	leader       *metapb.Peer
+	downPeers    []*pdpb.PeerStats
+	pendingPeers []*metapb.Peer
+	writtenBytes uint64
+	writtenKeys  uint64
+	readBytes    uint64
+	readKeys     uint64
+	// TODO
+	rwBytesTotal    uint64
 	approximateSize int64
 	approximateKeys int64
 	interval        *pdpb.TimeInterval
+}
+
+// denghejian
+var SplitRegionRwByte map[uint64]uint64
+
+func GetSplitRegionRwByte() map[uint64]uint64 {
+	if SplitRegionRwByte == nil {
+		SplitRegionRwByte = make(map[uint64]uint64)
+	}
+	return SplitRegionRwByte
 }
 
 // NewRegionInfo creates RegionInfo with region's meta and leader peer.
@@ -345,6 +358,12 @@ func (r *RegionInfo) GetBytesWritten() uint64 {
 	return r.writtenBytes
 }
 
+// denghejian
+// GetRwBytesTotal returns the total RW bytes of the region.
+func (r *RegionInfo) GetRwBytesTotal() uint64 {
+	return r.rwBytesTotal
+}
+
 // GetKeysWritten returns the written keys of the region.
 func (r *RegionInfo) GetKeysWritten() uint64 {
 	return r.writtenKeys
@@ -554,8 +573,42 @@ func (r *RegionsInfo) GetRegion(regionID uint64) *RegionInfo {
 	return region
 }
 
+// denghejian
 // SetRegion sets the RegionInfo with regionID
 func (r *RegionsInfo) SetRegion(region *RegionInfo) []*RegionInfo {
+	rwBytesTotalarr := GetSplitRegionRwByte()
+	// denghejian
+	overlaps := r.tree.getOverlaps(region)
+	if rwb, ok := rwBytesTotalarr[region.GetID()]; ok {
+		region.rwBytesTotal = rwb
+		delete(rwBytesTotalarr, region.GetID())
+	} else {
+		var sum uint64
+		sum = 0
+		for _, reg := range overlaps {
+			// denghejian
+			rInfo := r.regions.Get(reg.meta.GetId())
+			sum = sum + rInfo.rwBytesTotal
+		}
+		region.rwBytesTotal = sum
+	}
+	ok := false
+	for _, reg := range overlaps {
+		// denghejian
+		regInfo := r.regions.Get(reg.meta.GetId())
+		if regInfo != nil && regInfo.interval != nil && (time.Unix(int64(regInfo.interval.StartTimestamp), 0).Hour() < time.Unix(int64(region.interval.StartTimestamp), 0).Hour()) {
+			ok = true
+		}
+	}
+	if ok {
+		region.rwBytesTotal = region.rwBytesTotal / 2
+	}
+	if region.approximateSize > 0 {
+		region.rwBytesTotal = region.rwBytesTotal + (region.readBytes + region.writtenBytes)
+	} else {
+		region.rwBytesTotal = 0
+	}
+
 	if origin := r.regions.Get(region.GetID()); origin != nil {
 		r.RemoveRegion(origin)
 	}

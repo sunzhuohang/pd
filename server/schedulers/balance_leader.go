@@ -199,6 +199,13 @@ func (l *balanceLeaderScheduler) transferLeaderOut(cluster opt.Cluster, source *
 		schedulerCounter.WithLabelValues(l.GetName(), "no-leader-region").Inc()
 		return nil
 	}
+
+	// Skip predicted hot regions.
+	if schedule.IsPredictedHotRegion(cluster, region.GetID()) {
+		log.Debug("region is predicted hot", zap.String("scheduler", l.GetName()), zap.Uint64("region-id", region.GetID()))
+		return nil
+	}
+
 	targets := cluster.GetFollowerStores(region)
 	targets = filter.SelectTargetStores(targets, l.filters, cluster)
 	leaderSchedulePolicy := l.opController.GetLeaderSchedulePolicy()
@@ -226,6 +233,13 @@ func (l *balanceLeaderScheduler) transferLeaderIn(cluster opt.Cluster, target *c
 		schedulerCounter.WithLabelValues(l.GetName(), "no-follower-region").Inc()
 		return nil
 	}
+
+	// Skip predicted hot regions.
+	if schedule.IsPredictedHotRegion(cluster, region.GetID()) {
+		log.Debug("region is predicted hot", zap.String("scheduler", l.GetName()), zap.Uint64("region-id", region.GetID()))
+		return nil
+	}
+
 	leaderStoreID := region.GetLeader().GetStoreId()
 	source := cluster.GetStore(leaderStoreID)
 	if source == nil {
