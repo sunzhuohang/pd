@@ -337,7 +337,7 @@ func getTopK(cluster *cluster.RaftCluster, index int, dispatchT *dispatchTiming)
 		if data == 0 {
 			continue
 		}
-		index := (data - minrw) / segment
+		index := (maxrw - data) / segment
 		HotDegree[index].count++
 		HotDegree[index].regionID = append(HotDegree[index].regionID, v.GetID())
 	}
