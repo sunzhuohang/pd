@@ -125,13 +125,14 @@ func (s *Server) Bootstrap(ctx context.Context, request *pdpb.BootstrapRequest) 
 			Header: s.errorHeader(err),
 		}, nil
 	}
-	if _, err := s.bootstrapCluster(request); err != nil {
+
+	res, err := s.bootstrapCluster(request)
+	if err != nil {
 		return nil, status.Errorf(codes.Unknown, err.Error())
 	}
 
-	return &pdpb.BootstrapResponse{
-		Header: s.header(),
-	}, nil
+	res.Header = s.header()
+	return res, nil
 }
 
 // IsBootstrapped implements gRPC PDServer.
@@ -188,10 +189,9 @@ func (s *Server) GetStore(ctx context.Context, request *pdpb.GetStoreRequest) (*
 	}, nil
 }
 
-// checkStore2 returns an error response if the store exists and is in tombstone state.
+// checkStore returns an error response if the store exists and is in tombstone state.
 // It returns nil if it can't get the store.
-// Copied from server/command.go
-func checkStore2(rc *cluster.RaftCluster, storeID uint64) *pdpb.Error {
+func checkStore(rc *cluster.RaftCluster, storeID uint64) *pdpb.Error {
 	store := rc.GetStore(storeID)
 	if store != nil {
 		if store.GetState() == metapb.StoreState_Tombstone {
@@ -216,28 +216,34 @@ func (s *Server) PutStore(ctx context.Context, request *pdpb.PutStoreRequest) (*
 	}
 
 	store := request.GetStore()
-	if pberr := checkStore2(rc, store.GetId()); pberr != nil {
+	if pberr := checkStore(rc, store.GetId()); pberr != nil {
 		return &pdpb.PutStoreResponse{
 			Header: s.errorHeader(pberr),
 		}, nil
 	}
 
-	if err := rc.PutStore(store); err != nil {
+	// NOTE: can be removed when placement rules feature is enabled by default.
+	if !s.GetConfig().Replication.EnablePlacementRules && isTiFlashStore(store) {
+		return nil, status.Errorf(codes.FailedPrecondition, "placement rules is disabled")
+	}
+
+	if err := rc.PutStore(store, false); err != nil {
 		return nil, status.Errorf(codes.Unknown, err.Error())
 	}
 
 	log.Info("put store ok", zap.Stringer("store", store))
 	v := rc.OnStoreVersionChange()
 	if s.GetConfig().EnableDynamicConfig && v != nil {
-		err := s.updateConfigManager("cluster-version", v.String())
+		err := s.UpdateConfigManager("cluster-version", v.String())
 		if err != nil {
-			log.Error("failed to update the cluster version", zap.Error(err))
+			log.Error("failed to update the cluster version in config manager", zap.Error(err))
 		}
 	}
 	CheckPDVersion(s.scheduleOpt)
 
 	return &pdpb.PutStoreResponse{
-		Header: s.header(),
+		Header:          s.header(),
+		ReplicateStatus: rc.GetReplicateMode().GetReplicateStatus(),
 	}, nil
 }
 
@@ -284,7 +290,7 @@ func (s *Server) StoreHeartbeat(ctx context.Context, request *pdpb.StoreHeartbea
 		return &pdpb.StoreHeartbeatResponse{Header: s.notBootstrappedHeader()}, nil
 	}
 
-	if pberr := checkStore2(rc, request.GetStats().GetStoreId()); pberr != nil {
+	if pberr := checkStore(rc, request.GetStats().GetStoreId()); pberr != nil {
 		return &pdpb.StoreHeartbeatResponse{
 			Header: s.errorHeader(pberr),
 		}, nil
@@ -296,7 +302,8 @@ func (s *Server) StoreHeartbeat(ctx context.Context, request *pdpb.StoreHeartbea
 	}
 
 	return &pdpb.StoreHeartbeatResponse{
-		Header: s.header(),
+		Header:          s.header(),
+		ReplicateStatus: rc.GetReplicateMode().GetReplicateStatus(),
 	}, nil
 }
 

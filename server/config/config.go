@@ -15,6 +15,7 @@ package config
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -34,6 +35,7 @@ import (
 	"github.com/pingcap/pd/v4/server/schedule"
 	"github.com/pkg/errors"
 	"go.etcd.io/etcd/embed"
+	"go.etcd.io/etcd/pkg/transport"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -133,7 +135,9 @@ type Config struct {
 
 	EnableDynamicConfig bool `toml:"enable-dynamic-config" json:"enable-dynamic-config"`
 
-	EnableDashboard bool
+	Dashboard DashboardConfig `toml:"dashboard" json:"dashboard"`
+
+	ReplicateMode ReplicateModeConfig `toml:"replicate-mode" json:"replicate-mode"`
 }
 
 // NewConfig creates a new config.
@@ -166,8 +170,6 @@ func NewConfig() *Config {
 	fs.StringVar(&cfg.Security.CertPath, "cert", "", "Path of file that contains X509 certificate in PEM format")
 	fs.StringVar(&cfg.Security.KeyPath, "key", "", "Path of file that contains X509 key in PEM format")
 	fs.BoolVar(&cfg.ForceNewCluster, "force-new-cluster", false, "Force to create a new one-member cluster")
-
-	fs.BoolVar(&cfg.EnableDashboard, "enable-dashboard", true, "Enable Dashboard API and UI on this node")
 
 	return cfg
 }
@@ -206,7 +208,11 @@ const (
 	defaultEnableGRPCGateway   = true
 	defaultDisableErrorVerbose = true
 
-	defaultEnableDynamicConfig = true
+	defaultEnableDynamicConfig = false
+	defaultDashboardAddress    = "auto"
+
+	defaultDRWaitStoreTimeout = time.Minute
+	defaultDRWaitSyncTimeout  = time.Minute
 )
 
 var (
@@ -454,6 +460,9 @@ func (c *Config) Adjust(meta *toml.MetaData) error {
 	if !configMetaData.IsDefined("enable-dynamic-config") {
 		c.EnableDynamicConfig = defaultEnableDynamicConfig
 	}
+
+	c.ReplicateMode.adjust(configMetaData.Child("replicate-mode"))
+
 	return nil
 }
 
@@ -653,7 +662,7 @@ const (
 	defaultStoreBalanceRate       = 15
 	defaultTolerantSizeRatio      = 0
 	defaultLowSpaceRatio          = 0.8
-	defaultHighSpaceRatio         = 0.6
+	defaultHighSpaceRatio         = 0.7
 	// defaultHotRegionCacheHitsThreshold is the low hit number threshold of the
 	// hot region.
 	defaultHotRegionCacheHitsThreshold = 3
@@ -734,7 +743,6 @@ func (c *ScheduleConfig) migrateConfigurationMap() map[string][2]*bool {
 	}
 }
 
-// revive:disable-next-line:flag-parameter
 func (c *ScheduleConfig) parseDeprecatedFlag(meta *configMetaData, name string, old, new bool) (bool, error) {
 	oldName, newName := "disable-"+name, "enable-"+name
 	defineOld, defineNew := meta.IsDefined(oldName), meta.IsDefined(newName)
@@ -920,6 +928,8 @@ type PDServerConfig struct {
 	// MetricStorage is the cluster metric storage.
 	// Currently we use prometheus as metric storage, we may use PD/TiKV as metric storage later.
 	MetricStorage string `toml:"metric-storage" json:"metric-storage"`
+	// There are some values supported: "auto", "none", or a specific address, default: "auto"
+	DashboardAddress string `toml:"dashboard-address" json:"dashboard-address"`
 }
 
 func (c *PDServerConfig) adjust(meta *configMetaData) error {
@@ -935,7 +945,24 @@ func (c *PDServerConfig) adjust(meta *configMetaData) error {
 	if !meta.IsDefined("runtime-services") {
 		c.RuntimeServices = defaultRuntimeServices
 	}
+	if !meta.IsDefined("dashboard-address") {
+		c.DashboardAddress = defaultDashboardAddress
+	}
 	return nil
+}
+
+// Clone retruns a cloned PD server config.
+func (c *PDServerConfig) Clone() *PDServerConfig {
+	runtimeServices := make(typeutil.StringSlice, len(c.RuntimeServices))
+	copy(runtimeServices, c.RuntimeServices)
+	return &PDServerConfig{
+		UseRegionStorage: c.UseRegionStorage,
+		MaxResetTSGap:    c.MaxResetTSGap,
+		KeyType:          c.KeyType,
+		MetricStorage:    c.MetricStorage,
+		DashboardAddress: c.DashboardAddress,
+		RuntimeServices:  runtimeServices,
+	}
 }
 
 // StoreLabel is the config item of LabelPropertyConfig.
@@ -1045,13 +1072,20 @@ func (c *Config) GenEmbedEtcdConfig() (*embed.Config, error) {
 	cfg.AutoCompactionRetention = c.AutoCompactionRetention
 	cfg.QuotaBackendBytes = int64(c.QuotaBackendBytes)
 
+	allowedCN, serr := c.Security.GetOneAllowedCN()
+	if serr != nil {
+		return nil, serr
+	}
 	cfg.ClientTLSInfo.ClientCertAuth = len(c.Security.CAPath) != 0
 	cfg.ClientTLSInfo.TrustedCAFile = c.Security.CAPath
 	cfg.ClientTLSInfo.CertFile = c.Security.CertPath
 	cfg.ClientTLSInfo.KeyFile = c.Security.KeyPath
+	// Client no need to set the CN. (cfg.ClientTLSInfo.AllowedCN = allowedCN)
+	cfg.PeerTLSInfo.ClientCertAuth = len(c.Security.CAPath) != 0
 	cfg.PeerTLSInfo.TrustedCAFile = c.Security.CAPath
 	cfg.PeerTLSInfo.CertFile = c.Security.CertPath
 	cfg.PeerTLSInfo.KeyFile = c.Security.KeyPath
+	cfg.PeerTLSInfo.AllowedCN = allowedCN
 	cfg.ForceNewCluster = c.ForceNewCluster
 	cfg.ZapLoggerBuilder = embed.NewZapCoreLoggerBuilder(c.logger, c.logger.Core(), c.logProps.Syncer)
 	cfg.EnableGRPCGateway = c.EnableGRPCGateway
@@ -1080,4 +1114,61 @@ func (c *Config) GenEmbedEtcdConfig() (*embed.Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// DashboardConfig is the configuration for tidb-dashboard.
+type DashboardConfig struct {
+	TiDBCAPath   string `toml:"tidb-cacert-path" json:"tidb_cacert_path"`
+	TiDBCertPath string `toml:"tidb-cert-path" json:"tidb_cert_path"`
+	TiDBKeyPath  string `toml:"tidb-key-path" json:"tidb_key_path"`
+}
+
+// ToTiDBTLSConfig generates tls config for connecting to TiDB, used by tidb-dashboard.
+func (c DashboardConfig) ToTiDBTLSConfig() (*tls.Config, error) {
+	if (len(c.TiDBCertPath) != 0 && len(c.TiDBKeyPath) != 0) || len(c.TiDBCAPath) != 0 {
+		tlsInfo := transport.TLSInfo{
+			CertFile:      c.TiDBCertPath,
+			KeyFile:       c.TiDBKeyPath,
+			TrustedCAFile: c.TiDBCAPath,
+		}
+		tlsConfig, err := tlsInfo.ClientConfig()
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		return tlsConfig, nil
+	}
+	return nil, nil
+}
+
+// ReplicateModeConfig is the configuration for the replicate policy.
+type ReplicateModeConfig struct {
+	ReplicateMode string                    `toml:"replicate-mode" json:"replicate-mode"` // can be 'dr-autosync' or 'majority', default value is 'majority'
+	DRAutoSync    DRAutoSyncReplicateConfig `toml:"dr-autosync" json:"dr-autosync"`       // used when ReplicateMode is 'dr-autosync'
+}
+
+func (c *ReplicateModeConfig) adjust(meta *configMetaData) {
+	if !meta.IsDefined("replicate-mode") {
+		c.ReplicateMode = "majority"
+	}
+	c.DRAutoSync.adjust(meta.Child("dr-autosync"))
+}
+
+// DRAutoSyncReplicateConfig is the configuration for auto sync mode between 2 data centers.
+type DRAutoSyncReplicateConfig struct {
+	LabelKey         string            `toml:"label-key" json:"label-key"`
+	Primary          string            `toml:"primary" json:"primary"`
+	DR               string            `toml:"dr" json:"dr"`
+	PrimaryReplicas  int               `toml:"primary-replicas" json:"primary-replicas"`
+	DRReplicas       int               `toml:"dr-replicas" json:"dr-replicas"`
+	WaitStoreTimeout typeutil.Duration `toml:"wait-store-timeout" json:"wait-store-timeout"`
+	WaitSyncTimeout  typeutil.Duration `toml:"wait-sync-timeout" json:"wait-sync-timeout"`
+}
+
+func (c *DRAutoSyncReplicateConfig) adjust(meta *configMetaData) {
+	if !meta.IsDefined("wait-store-timeout") {
+		c.WaitStoreTimeout = typeutil.Duration{Duration: defaultDRWaitStoreTimeout}
+	}
+	if !meta.IsDefined("wait-sync-timeout") {
+		c.WaitSyncTimeout = typeutil.Duration{Duration: defaultDRWaitSyncTimeout}
+	}
 }

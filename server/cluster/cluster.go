@@ -34,6 +34,7 @@ import (
 	"github.com/pingcap/pd/v4/server/core"
 	"github.com/pingcap/pd/v4/server/id"
 	syncer "github.com/pingcap/pd/v4/server/region_syncer"
+	"github.com/pingcap/pd/v4/server/replicate"
 	"github.com/pingcap/pd/v4/server/schedule"
 	"github.com/pingcap/pd/v4/server/schedule/checker"
 	"github.com/pingcap/pd/v4/server/schedule/opt"
@@ -44,7 +45,7 @@ import (
 	"go.uber.org/zap"
 )
 
-var backgroundJobInterval = time.Minute
+var backgroundJobInterval = 10 * time.Second
 
 const (
 	clientTimeout              = 3 * time.Second
@@ -54,6 +55,7 @@ const (
 // Server is the interface for cluster.
 type Server interface {
 	GetAllocator() *id.AllocatorImpl
+	GetConfig() *config.Config
 	GetScheduleOption() *config.ScheduleOption
 	GetStorage() *core.Storage
 	GetHBStreams() opt.HeartbeatStreams
@@ -103,7 +105,10 @@ type RaftCluster struct {
 	ruleManager *placement.RuleManager
 	client      *clientv3.Client
 
+	replicateMode *replicate.ModeManager
+
 	schedulersCallback func()
+	configCheck        bool
 }
 
 // Status saves some state information.
@@ -213,6 +218,11 @@ func (c *RaftCluster) Start(s Server) error {
 		}
 	}
 
+	c.replicateMode, err = replicate.NewReplicateModeManager(s.GetConfig().ReplicateMode, s.GetStorage(), s.GetAllocator())
+	if err != nil {
+		return err
+	}
+
 	c.coordinator = newCoordinator(c.ctx, cluster, s.GetHBStreams())
 	c.regionStats = statistics.NewRegionStatistics(c.opt)
 	c.limiter = NewStoreLimiter(c.coordinator.opController)
@@ -316,7 +326,7 @@ func (c *RaftCluster) Stop() {
 	}
 
 	c.running = false
-
+	c.configCheck = false
 	close(c.quit)
 	c.coordinator.stop()
 	c.Unlock()
@@ -363,6 +373,13 @@ func (c *RaftCluster) GetRegionSyncer() *syncer.RegionSyncer {
 	c.RLock()
 	defer c.RUnlock()
 	return c.regionSyncer
+}
+
+// GetReplicateMode returns the ReplicateMode.
+func (c *RaftCluster) GetReplicateMode() *replicate.ModeManager {
+	c.RLock()
+	defer c.RUnlock()
+	return c.replicateMode
 }
 
 // GetStorage returns the storage.
@@ -430,7 +447,7 @@ func (c *RaftCluster) processRegionHeartbeat(region *core.RegionInfo) error {
 	// Save to storage if meta is updated.
 	// Save to cache if meta or leader is updated, or contains any down/pending peer.
 	// Mark isNew if the region in cache does not have leader.
-	var saveKV, saveCache, isNew bool
+	var saveKV, saveCache, isNew, statsChange bool
 	if origin == nil {
 		log.Debug("insert new region",
 			zap.Uint64("region-id", region.GetID()),
@@ -489,36 +506,28 @@ func (c *RaftCluster) processRegionHeartbeat(region *core.RegionInfo) error {
 			region.GetBytesRead() != origin.GetBytesRead() ||
 			region.GetKeysWritten() != origin.GetKeysWritten() ||
 			region.GetKeysRead() != origin.GetKeysRead() {
-			saveCache = true
+			saveCache, statsChange = true, true
 		}
 	}
 
-	if saveKV && c.storage != nil {
-		if err := c.storage.SaveRegion(region.GetMeta()); err != nil {
-			// Not successfully saved to storage is not fatal, it only leads to longer warm-up
-			// after restart. Here we only log the error then go on updating cache.
-			log.Error("failed to save region to storage",
-				zap.Uint64("region-id", region.GetID()),
-				zap.Stringer("region-meta", core.RegionToHexMeta(region.GetMeta())),
-				zap.Error(err))
-		}
-		regionEventCounter.WithLabelValues("update_kv").Inc()
-		select {
-		case c.changedRegions <- region:
-		default:
-		}
-	}
-	if len(writeItems) == 0 && len(readItems) == 0 && !saveCache && !isNew {
+	if len(writeItems) == 0 && len(readItems) == 0 && !saveKV && !saveCache && !isNew {
 		return nil
 	}
 
-	c.Lock()
-	defer c.Unlock()
-	if isNew {
-		c.prepareChecker.collect(region)
-	}
+	failpoint.Inject("concurrentRegionHeartbeat", func() {
+		time.Sleep(500 * time.Millisecond)
+	})
 
+	c.Lock()
 	if saveCache {
+		// To prevent a concurrent heartbeat of another region from overriding the up-to-date region info by a stale one,
+		// check its validation again here.
+		//
+		// However it can't solve the race condition of concurrent heartbeats from the same region.
+		if _, err := c.core.PreCheckPutRegion(region); err != nil {
+			c.Unlock()
+			return err
+		}
 		overlaps := c.core.PutRegion(region)
 		if c.storage != nil {
 			for _, item := range overlaps {
@@ -549,6 +558,10 @@ func (c *RaftCluster) processRegionHeartbeat(region *core.RegionInfo) error {
 		regionEventCounter.WithLabelValues("update_cache").Inc()
 	}
 
+	if isNew {
+		c.prepareChecker.collect(region)
+	}
+
 	if c.regionStats != nil {
 		c.regionStats.Observe(region, c.takeRegionStoresLocked(region))
 	}
@@ -559,6 +572,28 @@ func (c *RaftCluster) processRegionHeartbeat(region *core.RegionInfo) error {
 	for _, readItem := range readItems {
 		c.hotSpotCache.Update(readItem)
 	}
+	c.Unlock()
+
+	// If there are concurrent heartbeats from the same region, the last write will win even if
+	// writes to storage in the critical area. So don't use mutex to protect it.
+	if saveKV && c.storage != nil {
+		if err := c.storage.SaveRegion(region.GetMeta()); err != nil {
+			// Not successfully saved to storage is not fatal, it only leads to longer warm-up
+			// after restart. Here we only log the error then go on updating cache.
+			log.Error("failed to save region to storage",
+				zap.Uint64("region-id", region.GetID()),
+				zap.Stringer("region-meta", core.RegionToHexMeta(region.GetMeta())),
+				zap.Error(err))
+		}
+		regionEventCounter.WithLabelValues("update_kv").Inc()
+	}
+	if saveKV || statsChange {
+		select {
+		case c.changedRegions <- region:
+		default:
+		}
+	}
+
 	return nil
 }
 
@@ -768,8 +803,9 @@ func (c *RaftCluster) GetAdjacentRegions(region *core.RegionInfo) (*core.RegionI
 	return c.core.GetAdjacentRegions(region)
 }
 
-// UpdateStoreLabels updates a store's location labels.
-func (c *RaftCluster) UpdateStoreLabels(storeID uint64, labels []*metapb.StoreLabel) error {
+// UpdateStoreLabels updates a store's location labels
+// If 'force' is true, then update the store's labels forcibly.
+func (c *RaftCluster) UpdateStoreLabels(storeID uint64, labels []*metapb.StoreLabel, force bool) error {
 	store := c.GetStore(storeID)
 	if store == nil {
 		return errors.Errorf("invalid store ID %d, not found", storeID)
@@ -777,12 +813,13 @@ func (c *RaftCluster) UpdateStoreLabels(storeID uint64, labels []*metapb.StoreLa
 	newStore := proto.Clone(store.GetMeta()).(*metapb.Store)
 	newStore.Labels = labels
 	// PutStore will perform label merge.
-	err := c.PutStore(newStore)
+	err := c.PutStore(newStore, force)
 	return err
 }
 
 // PutStore puts a store.
-func (c *RaftCluster) PutStore(store *metapb.Store) error {
+// If 'force' is true, then overwrite the store's labels.
+func (c *RaftCluster) PutStore(store *metapb.Store, force bool) error {
 	c.Lock()
 	defer c.Unlock()
 
@@ -815,9 +852,13 @@ func (c *RaftCluster) PutStore(store *metapb.Store) error {
 		// Add a new store.
 		s = core.NewStoreInfo(store)
 	} else {
+		// Use the given labels to update the store.
+		labels := store.GetLabels()
+		if !force {
+			// If 'force' isn't set, the given labels will merge into those labels which already existed in the store.
+			labels = s.MergeLabels(labels)
+		}
 		// Update an existed store.
-		labels := s.MergeLabels(store.GetLabels())
-
 		s = s.Clone(
 			core.SetStoreAddress(store.Address, store.StatusAddress, store.PeerAddress),
 			core.SetStoreVersion(store.GitHash, store.Version),
@@ -893,7 +934,7 @@ func (c *RaftCluster) RemoveStore(storeID uint64) error {
 // State transition:
 // Case 1: Up -> Tombstone (if force is true);
 // Case 2: Offline -> Tombstone.
-func (c *RaftCluster) BuryStore(storeID uint64, force bool) error { // revive:disable-line:flag-parameter
+func (c *RaftCluster) BuryStore(storeID uint64, force bool) error {
 	c.Lock()
 	defer c.Unlock()
 
@@ -938,6 +979,20 @@ func (c *RaftCluster) UnblockStore(storeID uint64) {
 // AttachAvailableFunc attaches an available function to a specific store.
 func (c *RaftCluster) AttachAvailableFunc(storeID uint64, f func() bool) {
 	c.core.AttachAvailableFunc(storeID, f)
+}
+
+// SetConfigCheck sets a flag for preventing outdated config.
+func (c *RaftCluster) SetConfigCheck() {
+	c.Lock()
+	defer c.Unlock()
+	c.configCheck = true
+}
+
+// GetConfigCheck returns a configCheck flag.
+func (c *RaftCluster) GetConfigCheck() bool {
+	c.Lock()
+	defer c.Unlock()
+	return c.configCheck
 }
 
 // SetStoreState sets up a store's state.
@@ -1416,7 +1471,7 @@ func (c *RaftCluster) CheckLabelProperty(typ string, labels []*metapb.StoreLabel
 func (c *RaftCluster) isPrepared() bool {
 	c.RLock()
 	defer c.RUnlock()
-	return c.prepareChecker.check(c)
+	return c.prepareChecker.check(c) && c.configCheck
 }
 
 // GetStoresBytesWriteStat returns the bytes write stat of all StoreInfo.
@@ -1589,6 +1644,7 @@ func (c *RaftCluster) GetStoreLimiter() *StoreLimiter {
 }
 
 // DialClient used to dial http request.
+// Alreadly supports tls in InitHTTPClient(pd-server/main.go)
 var DialClient = &http.Client{
 	Timeout: clientTimeout,
 	Transport: &http.Transport{

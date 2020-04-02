@@ -144,7 +144,7 @@ type Server struct {
 }
 
 // HandlerBuilder builds a server HTTP handler.
-type HandlerBuilder func(context.Context, *Server) (http.Handler, ServiceGroup, func())
+type HandlerBuilder func(context.Context, *Server) (http.Handler, ServiceGroup, error)
 
 // ServiceGroup used to register the service.
 type ServiceGroup struct {
@@ -161,32 +161,22 @@ const (
 	ExtensionsPath = "/pd/apis"
 )
 
-type lazyHandler struct {
-	options []func()
-	engine  *negroni.Negroni
-}
-
-func (lazy *lazyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	for _, f := range lazy.options {
-		f()
-	}
-
-	lazy.engine.ServeHTTP(w, r)
-}
-
 func combineBuilderServerHTTPService(ctx context.Context, svr *Server, serviceBuilders ...HandlerBuilder) (map[string]http.Handler, error) {
 	userHandlers := make(map[string]http.Handler)
+	registerMap := make(map[string]struct{})
 
 	apiService := negroni.New()
 	recovery := negroni.NewRecovery()
 	apiService.Use(recovery)
 	router := mux.NewRouter()
-	registerMap := make(map[string]struct{})
-	var options []func()
+
 	for _, build := range serviceBuilders {
-		handler, info, f := build(ctx, svr)
-		if f != nil {
-			options = append(options, f)
+		handler, info, err := build(ctx, svr)
+		if err != nil {
+			return nil, err
+		}
+		if !info.IsCore && len(info.PathPrefix) == 0 && (len(info.Name) == 0 || len(info.Version) == 0) {
+			return nil, errors.Errorf("invalid API information, group %s version %s", info.Name, info.Version)
 		}
 		var pathPrefix string
 		if len(info.PathPrefix) != 0 {
@@ -220,10 +210,7 @@ func combineBuilderServerHTTPService(ctx context.Context, svr *Server, serviceBu
 		}
 	}
 	apiService.UseHandler(router)
-	userHandlers[pdAPIPrefix] = &lazyHandler{
-		engine:  apiService,
-		options: options,
-	}
+	userHandlers[pdAPIPrefix] = apiService
 
 	return userHandlers, nil
 }
@@ -260,10 +247,7 @@ func CreateServer(ctx context.Context, cfg *config.Config, serviceBuilders ...Ha
 	etcdCfg.ServiceRegister = func(gs *grpc.Server) {
 		pdpb.RegisterPDServer(gs, s)
 		diagnosticspb.RegisterDiagnosticsServer(gs, s)
-
-		if cfg.EnableDynamicConfig {
-			configpb.RegisterConfigServer(gs, s.cfgManager)
-		}
+		configpb.RegisterConfigServer(gs, s.cfgManager)
 	}
 	s.etcdCfg = etcdCfg
 	if EnableZap {
@@ -310,7 +294,7 @@ func (s *Server) startEtcd(ctx context.Context) error {
 	}
 
 	endpoints := []string{s.etcdCfg.ACUrls[0].String()}
-	log.Info("create etcd v3 client", zap.Strings("endpoints", endpoints))
+	log.Info("create etcd v3 client", zap.Strings("endpoints", endpoints), zap.Reflect("cert", s.cfg.Security))
 
 	client, err := clientv3.New(clientv3.Config{
 		Endpoints:   endpoints,
@@ -381,6 +365,9 @@ func (s *Server) startServer(ctx context.Context) error {
 	s.storage = core.NewStorage(kvBase).SetRegionStorage(regionStorage)
 	s.basicCluster = core.NewBasicCluster()
 	s.cluster = cluster.NewRaftCluster(ctx, s.GetClusterRootPath(), s.clusterID, syncer.NewRegionSyncer(s), s.client)
+	if !s.cfg.EnableDynamicConfig {
+		s.cluster.SetConfigCheck()
+	}
 	s.hbStreams = newHeartbeatStreams(ctx, s.clusterID, s.cluster)
 
 	// Run callbacks
@@ -598,7 +585,9 @@ func (s *Server) bootstrapCluster(req *pdpb.BootstrapRequest) (*pdpb.BootstrapRe
 		return nil, err
 	}
 
-	return &pdpb.BootstrapResponse{}, nil
+	return &pdpb.BootstrapResponse{
+		ReplicateStatus: s.cluster.GetReplicateMode().GetReplicateStatus(),
+	}, nil
 }
 
 func (s *Server) createRaftCluster() error {
@@ -701,8 +690,8 @@ func (s *Server) GetSchedulersCallback() func() {
 				log.Error("failed to encode config", zap.Error(err))
 			}
 
-			if err := s.updateConfigManager("schedule.schedulers", buf.String()); err != nil {
-				log.Error("failed to update the schedulers", zap.Error(err))
+			if err := s.UpdateConfigManager("schedule.schedulers", buf.String()); err != nil {
+				log.Error("failed to update the schedulers in config manager", zap.Error(err))
 			}
 		}
 	}
@@ -752,19 +741,6 @@ func (s *Server) GetConfig() *config.Config {
 func (s *Server) GetScheduleConfig() *config.ScheduleConfig {
 	cfg := &config.ScheduleConfig{}
 	*cfg = *s.scheduleOpt.Load()
-	storage := s.GetStorage()
-	if storage == nil {
-		return cfg
-	}
-	sches, configs, err := storage.LoadAllScheduleConfig()
-	if err != nil {
-		return cfg
-	}
-	payload := make(map[string]string)
-	for i, sche := range sches {
-		payload[sche] = configs[i]
-	}
-	cfg.SchedulersPayload = payload
 	return cfg
 }
 
@@ -777,6 +753,7 @@ func (s *Server) SetScheduleConfig(cfg config.ScheduleConfig) error {
 		return err
 	}
 	old := s.scheduleOpt.Load()
+	cfg.SchedulersPayload = nil
 	s.scheduleOpt.Store(&cfg)
 	if err := s.scheduleOpt.Persist(s.storage); err != nil {
 		s.scheduleOpt.Store(old)
@@ -802,17 +779,27 @@ func (s *Server) SetReplicationConfig(cfg config.ReplicationConfig) error {
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
-	if cfg.EnablePlacementRules {
+	old := s.scheduleOpt.GetReplication().Load()
+	if cfg.EnablePlacementRules != old.EnablePlacementRules {
 		raftCluster := s.GetRaftCluster()
 		if raftCluster == nil {
 			return errors.WithStack(cluster.ErrNotBootstrapped)
 		}
-		// initialize rule manager.
-		if err := raftCluster.GetRuleManager().Initialize(int(cfg.MaxReplicas), cfg.LocationLabels); err != nil {
-			return err
+		if cfg.EnablePlacementRules {
+			// initialize rule manager.
+			if err := raftCluster.GetRuleManager().Initialize(int(cfg.MaxReplicas), cfg.LocationLabels); err != nil {
+				return err
+			}
+		} else {
+			// NOTE: can be removed after placement rules feature is enabled by default.
+			for _, s := range raftCluster.GetStores() {
+				if !s.IsTombstone() && isTiFlashStore(s.GetMeta()) {
+					return errors.New("cannot disable placement rules with TiFlash nodes")
+				}
+			}
 		}
 	}
-	old := s.scheduleOpt.GetReplication().Load()
+
 	s.scheduleOpt.GetReplication().Store(&cfg)
 	if err := s.scheduleOpt.Persist(s.storage); err != nil {
 		s.scheduleOpt.GetReplication().Store(old)
@@ -928,19 +915,18 @@ func (s *Server) DeleteLabelProperty(typ, labelKey, labelValue string) error {
 	return nil
 }
 
-func (s *Server) updateConfigManager(name, value string) error {
-	configManager := s.GetConfigManager()
-	globalVersion := configManager.GetGlobalConfigs(Component).GetVersion()
+// UpdateConfigManager is used to update config manager directly.
+func (s *Server) UpdateConfigManager(name, value string) error {
+	cm := s.GetConfigManager()
+	globalVersion := cm.GetGlobalVersion(cm.GetGlobalConfigs(Component))
 	version := &configpb.Version{Global: globalVersion}
 	entries := []*configpb.ConfigEntry{{Name: name, Value: value}}
-	configManager.Lock()
-	_, status := configManager.UpdateGlobal(Component, version, entries)
-	configManager.Unlock()
+	_, status := cm.UpdateGlobal(Component, version, entries)
 	if status.GetCode() != configpb.StatusCode_OK {
 		return errors.New(status.GetMessage())
 	}
 
-	return configManager.Persist(s.GetStorage())
+	return cm.Persist(s.GetStorage())
 }
 
 // GetLabelProperty returns the whole label property config.
@@ -1011,6 +997,15 @@ func (s *Server) GetMetaRegions() []*metapb.Region {
 	cluster := s.GetRaftCluster()
 	if cluster != nil {
 		return cluster.GetMetaRegions()
+	}
+	return nil
+}
+
+// GetRegions gets regions from cluster.
+func (s *Server) GetRegions() []*core.RegionInfo {
+	cluster := s.GetRaftCluster()
+	if cluster != nil {
+		return cluster.GetRegions()
 	}
 	return nil
 }
@@ -1234,19 +1229,30 @@ func (s *Server) configCheckLoop() {
 			log.Info("config check has been stopped")
 			return
 		case <-ticker.C:
-			version := s.GetConfigVersion()
-			config, err := s.getComponentConfig(ctx, version, compoenntID)
-			if err != nil {
-				log.Error("failed to get config", zap.Error(err))
-			}
-			if config == "" {
-				continue
-			}
-			if err := s.updateComponentConfig(config); err != nil {
+			if err := s.updateConfig(ctx, compoenntID); err != nil {
 				log.Error("failed to update config", zap.Error(err))
+			}
+
+			rc := s.GetRaftCluster()
+			if s.GetMember().IsLeader() && rc != nil {
+				if !rc.GetConfigCheck() {
+					rc.SetConfigCheck()
+				}
 			}
 		}
 	}
+}
+
+func (s *Server) updateConfig(ctx context.Context, compoenntID string) error {
+	version := s.GetConfigVersion()
+	config, err := s.getComponentConfig(ctx, version, compoenntID)
+	if err != nil {
+		return err
+	}
+	if config == "" {
+		return nil
+	}
+	return s.updateComponentConfig(config)
 }
 
 func (s *Server) createComponentConfig(ctx context.Context, version *configpb.Version, componentID, config string) error {
@@ -1293,38 +1299,36 @@ func (s *Server) updateComponentConfig(cfg string) error {
 		return err
 	}
 	var err error
-	if !reflect.DeepEqual(s.GetScheduleConfig(), &new.Schedule) {
-		if err = new.Schedule.Validate(); err != nil {
-			return err
-		}
+	old := *s.GetConfig()
+	// SchedulersPayload doesn't need to be updated.
+	new.Schedule.SchedulersPayload = nil
+	old.Schedule.SchedulersPayload = nil
+	if !reflect.DeepEqual(old.Schedule, new.Schedule) {
 		err = s.SetScheduleConfig(new.Schedule)
 		saveFile = true
 	}
 
-	if !reflect.DeepEqual(s.GetReplicationConfig(), &new.Replication) {
-		if err = new.Replication.Validate(); err != nil {
-			return err
-		}
+	if !reflect.DeepEqual(old.Replication, new.Replication) {
 		err = s.SetReplicationConfig(new.Replication)
 		saveFile = true
 	}
 
-	if !reflect.DeepEqual(s.GetPDServerConfig(), &new.PDServerCfg) {
+	if !reflect.DeepEqual(old.PDServerCfg, new.PDServerCfg) {
 		err = s.SetPDServerConfig(new.PDServerCfg)
 		saveFile = true
 	}
 
-	if !reflect.DeepEqual(s.GetClusterVersion(), new.ClusterVersion) {
+	if !reflect.DeepEqual(old.ClusterVersion, new.ClusterVersion) {
 		err = s.SetClusterVersion(new.ClusterVersion.String())
 		saveFile = true
 	}
 
-	if !reflect.DeepEqual(s.GetLabelProperty(), new.LabelProperty) {
+	if !reflect.DeepEqual(old.LabelProperty, new.LabelProperty) {
 		err = s.SetLabelPropertyConfig(new.LabelProperty)
 		saveFile = true
 	}
 
-	if !reflect.DeepEqual(s.GetLogConfig(), &new.Log) {
+	if !reflect.DeepEqual(old.Log, new.Log) {
 		err = s.SetLogConfig(new.Log)
 		saveFile = true
 	}

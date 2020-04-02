@@ -22,10 +22,10 @@ import (
 
 	grpcprometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
 	"github.com/pingcap/log"
-	dashboardapi "github.com/pingcap/pd/v4/pkg/dashboard/apiserver"
-	dashboardui "github.com/pingcap/pd/v4/pkg/dashboard/uiserver"
+	"github.com/pingcap/pd/v4/pkg/dashboard"
 	"github.com/pingcap/pd/v4/pkg/logutil"
 	"github.com/pingcap/pd/v4/pkg/metricutil"
+	"github.com/pingcap/pd/v4/pkg/swaggerserver"
 	"github.com/pingcap/pd/v4/server"
 	"github.com/pingcap/pd/v4/server/api"
 	"github.com/pingcap/pd/v4/server/config"
@@ -96,9 +96,8 @@ func main() {
 	// Creates server.
 	ctx, cancel := context.WithCancel(context.Background())
 	serviceBuilders := []server.HandlerBuilder{api.NewHandler}
-	if cfg.EnableDashboard {
-		serviceBuilders = append(serviceBuilders, dashboardapi.NewService, dashboardui.NewService)
-	}
+	serviceBuilders = append(serviceBuilders, dashboard.GetServiceBuilders()...)
+	serviceBuilders = append(serviceBuilders, swaggerserver.NewHandler)
 	svr, err := server.CreateServer(ctx, cfg, serviceBuilders...)
 	if err != nil {
 		log.Fatal("create server failed", zap.Error(err))

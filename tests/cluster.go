@@ -23,8 +23,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pingcap/log"
-	dashboardapi "github.com/pingcap/pd/v4/pkg/dashboard/apiserver"
-	dashboardui "github.com/pingcap/pd/v4/pkg/dashboard/uiserver"
+	"github.com/pingcap/pd/v4/pkg/dashboard"
 	"github.com/pingcap/pd/v4/server"
 	"github.com/pingcap/pd/v4/server/api"
 	"github.com/pingcap/pd/v4/server/cluster"
@@ -70,9 +69,7 @@ func NewTestServer(ctx context.Context, cfg *config.Config) (*TestServer, error)
 		return nil, err
 	}
 	serviceBuilders := []server.HandlerBuilder{api.NewHandler}
-	if cfg.EnableDashboard {
-		serviceBuilders = append(serviceBuilders, dashboardapi.NewService, dashboardui.NewService)
-	}
+	serviceBuilders = append(serviceBuilders, dashboard.GetServiceBuilders()...)
 	svr, err := server.CreateServer(ctx, cfg, serviceBuilders...)
 	if err != nil {
 		return nil, err
@@ -148,6 +145,13 @@ func (s *TestServer) GetConfig() *config.Config {
 	s.RLock()
 	defer s.RUnlock()
 	return s.server.GetConfig()
+}
+
+// GetScheduleOption returns the current TestServer's schedule option.
+func (s *TestServer) GetScheduleOption() *config.ScheduleOption {
+	s.RLock()
+	defer s.RUnlock()
+	return s.server.GetScheduleOption()
 }
 
 // GetAllocator returns the current TestServer's ID allocator.

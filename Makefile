@@ -6,9 +6,10 @@ INTEGRATION_TEST_PKGS := $(shell find . -iname "*_test.go" -exec dirname {} \; |
                      sort -u | sed -e "s/^\./github.com\/pingcap\/pd\/v4/" | grep -E "tests")
 BASIC_TEST_PKGS := $(filter-out $(INTEGRATION_TEST_PKGS),$(TEST_PKGS))
 
-PACKAGES := go list ./... | grep -v 'dashboard/uiserver'
+IGNORE := grep -v 'dashboard/uiserver'
+PACKAGES := go list ./... | $(IGNORE)
 PACKAGE_DIRECTORIES := $(PACKAGES) | sed 's|$(PD_PKG)/||'
-GOCHECKER := awk '{ print } END { if (NR > 0) { exit 1 } }'
+GOCHECKER := $(IGNORE) | awk '{ print } END { if (NR > 0) { exit 1 } }'
 OVERALLS := overalls
 
 TOOL_BIN_PATH := $(shell pwd)/.tools/bin
@@ -30,6 +31,12 @@ DEADLOCK_DISABLE := $$(\
 						| xargs goimports -w && \
 						find . -name "*.bak" | xargs rm && \
 						go mod tidy)
+
+BUILD_TAGS ?=
+
+ifneq ($(SWAGGER), 0)
+	BUILD_TAGS += swagger_server
+endif
 
 LDFLAGS += -X "$(PD_PKG)/server.PDReleaseVersion=$(shell git describe --tags --dirty)"
 LDFLAGS += -X "$(PD_PKG)/server.PDBuildTS=$(shell date -u '+%Y-%m-%d %I:%M:%S')"
@@ -55,13 +62,16 @@ build: pd-server pd-ctl
 tools: pd-tso-bench pd-recover pd-analysis pd-heartbeat-bench
 pd-server: export GO111MODULE=on
 pd-server:
+ifneq ($(SWAGGER), 0)
+	make swagger-spec
+endif
 ifneq ($(OS),Windows_NT)
 	./scripts/embed-dashboard-ui.sh
 endif
 ifeq ("$(WITH_RACE)", "1")
-	CGO_ENABLED=1 go build -race -gcflags '$(GCFLAGS)' -ldflags '$(LDFLAGS)' -o bin/pd-server cmd/pd-server/main.go
+	CGO_ENABLED=1 go build -race -gcflags '$(GCFLAGS)' -ldflags '$(LDFLAGS)' -tags "${BUILD_TAGS}" -o bin/pd-server cmd/pd-server/main.go
 else
-	CGO_ENABLED=1 go build -gcflags '$(GCFLAGS)' -ldflags '$(LDFLAGS)' -o bin/pd-server cmd/pd-server/main.go
+	CGO_ENABLED=1 go build -gcflags '$(GCFLAGS)' -ldflags '$(LDFLAGS)' -tags "${BUILD_TAGS}" -o bin/pd-server cmd/pd-server/main.go
 endif
 
 # Tools
@@ -129,6 +139,10 @@ static:
 lint:
 	@echo "linting"
 	CGO_ENABLED=0 revive -formatter friendly -config revive.toml $$($(PACKAGES))
+
+swagger-spec: install-tools
+	go mod vendor
+	swag init --parseVendor -generalInfo server/api/router.go --exclude vendor/github.com/pingcap-incubator/tidb-dashboard --output docs/swagger
 
 tidy:
 	@echo "go mod tidy"

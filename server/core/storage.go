@@ -33,11 +33,12 @@ import (
 )
 
 const (
-	clusterPath  = "raft"
-	configPath   = "config"
-	schedulePath = "schedule"
-	gcPath       = "gc"
-	rulesPath    = "rules"
+	clusterPath   = "raft"
+	configPath    = "config"
+	schedulePath  = "schedule"
+	gcPath        = "gc"
+	rulesPath     = "rules"
+	replicatePath = "replicate"
 
 	customScheduleConfigPath = "scheduler_config"
 	componentsConfigPath     = "components_config"
@@ -237,7 +238,7 @@ func (s *Storage) DeleteRule(ruleKey string) error {
 }
 
 // LoadRules loads placement rules from storage.
-func (s *Storage) LoadRules(f func(v string) error) (bool, error) {
+func (s *Storage) LoadRules(f func(k, v string)) (bool, error) {
 	// Range is ['rule/\x00', 'rule0'). 'rule0' is the upper bound of all rules because '0' is next char of '/' in
 	// ascii order.
 	nextKey := path.Join(rulesPath, "\x00")
@@ -247,19 +248,42 @@ func (s *Storage) LoadRules(f func(v string) error) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		if len(values) == 0 {
+		if len(keys) == 0 {
 			return false, nil
 		}
-		for _, v := range values {
-			if err := f(v); err != nil {
-				return true, err
-			}
+		for i := range keys {
+			f(strings.TrimPrefix(keys[i], rulesPath+"/"), values[i])
 		}
-		if len(values) < minKVRangeLimit {
+		if len(keys) < minKVRangeLimit {
 			return true, nil
 		}
 		nextKey = keys[len(keys)-1] + "\x00"
 	}
+}
+
+// SaveReplicateStatus stores replicate status by mode.
+func (s *Storage) SaveReplicateStatus(mode string, status interface{}) error {
+	value, err := json.Marshal(status)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	return s.Save(path.Join(replicatePath, mode), string(value))
+}
+
+// LoadReplicateStatus loads replicate status by mode.
+func (s *Storage) LoadReplicateStatus(mode string, status interface{}) (bool, error) {
+	v, err := s.Load(path.Join(replicatePath, mode))
+	if err != nil {
+		return false, err
+	}
+	if v == "" {
+		return false, nil
+	}
+	err = json.Unmarshal([]byte(v), status)
+	if err != nil {
+		return false, errors.WithStack(err)
+	}
+	return true, nil
 }
 
 // LoadStores loads all stores from storage to StoresInfo.

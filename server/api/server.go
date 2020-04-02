@@ -26,7 +26,7 @@ import (
 const apiPrefix = "/pd"
 
 // NewHandler creates a HTTP handler for API.
-func NewHandler(ctx context.Context, svr *server.Server) (http.Handler, server.ServiceGroup, func()) {
+func NewHandler(ctx context.Context, svr *server.Server) (http.Handler, server.ServiceGroup, error) {
 	group := server.ServiceGroup{
 		Name:   "core",
 		IsCore: true,
@@ -38,6 +38,9 @@ func NewHandler(ctx context.Context, svr *server.Server) (http.Handler, server.S
 		serverapi.NewRedirector(svr),
 		negroni.Wrap(r)),
 	)
+	if f != nil {
+		svr.AddStartCallback(f)
+	}
 
-	return router, group, f
+	return router, group, nil
 }
