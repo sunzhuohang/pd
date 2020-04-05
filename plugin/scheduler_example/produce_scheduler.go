@@ -3,7 +3,13 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"github.com/pingcap/pd/v4/plugin/scheduler_example/elastic_scheduler"
+	"github.com/pingcap/tidb-operator/pkg/client/clientset/versioned"
+	informers "github.com/pingcap/tidb-operator/pkg/client/informers/externalversions"
+	"github.com/pingcap/tidb-operator/pkg/controller"
 	"io/ioutil"
+	kubeinformers "k8s.io/client-go/informers"
+	"k8s.io/klog"
 	"math"
 	"net/http"
 	"sort"
@@ -17,15 +23,21 @@ import (
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/log"
 
+	"github.com/pingcap/advanced-statefulset/pkg/apis/apps/v1/helper"
+	asclientset "github.com/pingcap/advanced-statefulset/pkg/client/clientset/versioned"
 	//"github.com/pingcap/pd/v4/server"
 	"github.com/pingcap/pd/v4/server/cluster"
 	"github.com/pingcap/pd/v4/server/core"
+	"github.com/pingcap/tidb-operator/pkg/features"
 	"go.uber.org/zap"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	"os"
 )
 
 const (
-	aiURL                = "http://192.168.1.127:8000/"
-	fetchInterval        = time.Hour / 3
+	aiURL                = "http://172.16.4.4:8000/"
+	fetchInterval        = time.Minute
 	uint64Min     uint64 = 0
 	uint64Max     uint64 = ^uint64(0)
 )
@@ -78,6 +90,7 @@ type predictInfo struct {
 	PredictStep         int            `json:"predict_step"`
 	HistoryR2ScoreTotal float64        `json:"history_r2_score_tot"`
 	TableInfo           []preTableInfo `json:"table_info"`
+	Replicas            int32          `json:"replicas"`
 }
 
 // TODO newPredictInfo
@@ -396,6 +409,7 @@ func ProcessPredictInfo(cluster *cluster.RaftCluster, updateCh chan int) {
 		select {
 		case dispatchT := <-ch:
 			go processTopK(cluster, dispatchT, updateCh)
+			go elasticSchedule(dispatchT.predictData.Replicas)
 		}
 	}
 }
@@ -430,5 +444,61 @@ func bubbleSortHotSpot(values []hotSpotPeriod) {
 		if flag == true {
 			break
 		}
+	}
+}
+
+func elasticSchedule(targetReplicas int32) {
+	ns := os.Getenv("NAMESPACE")
+	if ns == "" {
+		klog.Fatal("NAMESPACE environment variable not set")
+	}
+
+	cfg, err := rest.InClusterConfig()
+	if err != nil {
+		klog.Fatalf("failed to get config: %v", err)
+	}
+
+	cli, err := versioned.NewForConfig(cfg)
+	if err != nil {
+		klog.Fatalf("failed to create Clientset: %v", err)
+	}
+
+	var kubeCli kubernetes.Interface
+	kubeCli, err = kubernetes.NewForConfig(cfg)
+	if err != nil {
+		klog.Fatalf("failed to get kubernetes Clientset: %v", err)
+	}
+
+	asCli, err := asclientset.NewForConfig(cfg)
+	if err != nil {
+		klog.Fatalf("failed to get advanced-statefulset Clientset: %v", err)
+	}
+
+	if features.DefaultFeatureGate.Enabled(features.AdvancedStatefulSet) {
+		// If AdvancedStatefulSet is enabled, we hijack the Kubernetes client to use
+		// AdvancedStatefulSet.
+		kubeCli = helper.NewHijackClient(kubeCli, asCli)
+	}
+
+	var informerFactory informers.SharedInformerFactory
+	var kubeInformerFactory kubeinformers.SharedInformerFactory
+	if controller.ClusterScoped {
+		informerFactory = informers.NewSharedInformerFactory(cli, controller.ResyncDuration)
+		kubeInformerFactory = kubeinformers.NewSharedInformerFactory(kubeCli, controller.ResyncDuration)
+	} else {
+		options := []informers.SharedInformerOption{
+			informers.WithNamespace(ns),
+		}
+		informerFactory = informers.NewSharedInformerFactoryWithOptions(cli, controller.ResyncDuration, options...)
+
+		kubeoptions := []kubeinformers.SharedInformerOption{
+			kubeinformers.WithNamespace(ns),
+		}
+		kubeInformerFactory = kubeinformers.NewSharedInformerFactoryWithOptions(kubeCli, controller.ResyncDuration, kubeoptions...)
+	}
+
+	if features.DefaultFeatureGate.Enabled(features.AutoScaling) {
+		elasticSchedulerController := elastic_scheduler.NewController(kubeCli, cli, informerFactory, kubeInformerFactory, targetReplicas)
+		elasticSchedulerController.Run()
 	}
 }
