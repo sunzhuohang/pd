@@ -18,7 +18,6 @@ require (
 	github.com/go-playground/overalls v0.0.0-20180201144345-22ec1a223b7c
 	github.com/go-playground/universal-translator v0.17.0 // indirect
 	github.com/gogo/protobuf v1.3.1
-	github.com/golang/groupcache v0.0.0-20181024230925-c65c006176ff // indirect
 	github.com/golang/protobuf v1.3.2
 	github.com/google/btree v1.0.0
 	github.com/gorilla/mux v1.7.3
@@ -52,7 +51,6 @@ require (
 	github.com/swaggo/http-swagger v0.0.0-20200308142732-58ac5e232fba
 	github.com/swaggo/swag v1.6.6-0.20200323071853-8e21f4cefeea
 	github.com/syndtr/goleveldb v0.0.0-20180815032940-ae2bd5eed72d
-	github.com/tmc/grpc-websocket-proxy v0.0.0-20171017195756-830351dc03c6 // indirect
 	github.com/unrolled/render v0.0.0-20171102162132-65450fb6b2d3
 	github.com/urfave/negroni v1.0.0
 	go.etcd.io/etcd v0.5.0-alpha.5.0.20191023171146-3cf2f69b5738
