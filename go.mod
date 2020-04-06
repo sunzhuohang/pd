@@ -4,6 +4,7 @@ go 1.13
 
 require (
 	github.com/BurntSushi/toml v0.3.1
+	github.com/alecthomas/template v0.0.0-20190718012654-fb15b899a751
 	github.com/chzyer/logex v1.1.10 // indirect
 	github.com/chzyer/readline v0.0.0-20171208011716-f6d7a1f6fbf3
 	github.com/chzyer/test v0.0.0-20180213035817-a1ea475d72b1 // indirect
@@ -120,7 +121,7 @@ replace k8s.io/legacy-cloud-providers => k8s.io/legacy-cloud-providers v0.0.0-20
 
 replace k8s.io/node-api => k8s.io/node-api v0.0.0-20190918163711-2299658ad911
 
-replace github.com/uber-go/atomic => go.uber.org/atomic v1.5.0
+replace github.com/uber-go/atomic => github.com/uber-go/atomic v1.4.0
 
 replace github.com/Azure/go-autorest => github.com/Azure/go-autorest v12.2.0+incompatible
 
