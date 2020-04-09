@@ -317,6 +317,7 @@ type HotRegionTable struct {
 
 // TODO 这个server用的是以前的
 func getTopK(cluster *cluster.RaftCluster, index int, dispatchT *dispatchTiming) []uint64 {
+	log.Info("Start getTopK")
 	DeltT := dispatchT.scheduleTime[index].DeltT
 	regions := cluster.GetRegions()
 	if len(regions) <= 0 {
@@ -345,14 +346,16 @@ func getTopK(cluster *cluster.RaftCluster, index int, dispatchT *dispatchTiming)
 		segment = 1
 	}
 	HotDegree := make([]HotRegionTable, len(regions)+1)
+	log.Info("len of HotDegree: ", zap.Any("len(HotDegree)", len(HotDegree)))
 	for index, v := range regions {
 		data := tmp[index]
 		if data == 0 {
 			continue
 		}
-		index := (maxrw - data) / segment
-		HotDegree[index].count++
-		HotDegree[index].regionID = append(HotDegree[index].regionID, v.GetID())
+		indexData := (maxrw - data) / segment
+		klog.Info("indexData: ", zap.Any("indexData", indexData))
+		HotDegree[indexData].count++
+		HotDegree[indexData].regionID = append(HotDegree[indexData].regionID, v.GetID())
 	}
 	k := 0
 	topk := len(regions) / 10
@@ -448,6 +451,7 @@ func bubbleSortHotSpot(values []hotSpotPeriod) {
 }
 
 func elasticSchedule(targetReplicas int32) {
+	log.Info("Start elasticSchedule.")
 	ns := os.Getenv("NAMESPACE")
 	if ns == "" {
 		klog.Fatal("NAMESPACE environment variable not set")
