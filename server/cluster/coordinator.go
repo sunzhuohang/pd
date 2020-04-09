@@ -308,23 +308,23 @@ func (c *coordinator) LoadPlugin(pluginPath string, ch chan string) {
 
 	// func2 : CreateUserScheduler()
 	// TODO 这里dc使用的是自己的 Scheduler 创建器
-	func2, err := c.pluginInterface.GetFunction(pluginPath, "CreateUserScheduler")
-	if err != nil {
-		log.Error("GetFunction err", zap.Error(err))
-		return
-	}
-	CreateUserScheduler := func2.(func(*schedule.OperatorController, opt.Cluster) []schedule.Scheduler)
-	schedulers := CreateUserScheduler(c.opController, c.cluster)
-	for _, s := range schedulers {
-		if err := c.addUserScheduler(s); err != nil {
-			log.Error("can not add scheduler", zap.String("scheduler-name", s.GetName()), zap.Error(err))
-		}
-	}
+	//func2, err := c.pluginInterface.GetFunction(pluginPath, "CreateUserScheduler")
+	//if err != nil {
+	//	log.Error("GetFunction err", zap.Error(err))
+	//	return
+	//}
+	//CreateUserScheduler := func2.(func(*schedule.OperatorController, opt.Cluster) []schedule.Scheduler)
+	//schedulers := CreateUserScheduler(c.opController, c.cluster)
+	//for _, s := range schedulers {
+	//	if err := c.addUserScheduler(s); err != nil {
+	//		log.Error("can not add scheduler", zap.String("scheduler-name", s.GetName()), zap.Error(err))
+	//	}
+	//}
 
 	ch2 := make(chan int)
-	c.wg.Add(2)
+	c.wg.Add(1)
 	go ProcessPredictInfo(c.cluster, ch2)
-	go c.updateUserScheduler(CreateUserScheduler, ch2)
+	//go c.updateUserScheduler(CreateUserScheduler, ch2)
 
 	//c.wg.Add(1)
 	//go c.waitPluginUnload(pluginPath, s.GetName(), ch)

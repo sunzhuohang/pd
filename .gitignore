@@ -4,7 +4,7 @@ bin
 default.etcd
 default.pd
 *.swp
-.DS_Store
+.DS_Storegit
 tags
 /.retools/
 vendor
