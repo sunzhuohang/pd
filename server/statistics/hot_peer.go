@@ -26,6 +26,8 @@ type HotPeerStat struct {
 	StoreID  uint64 `json:"store_id"`
 	RegionID uint64 `json:"region_id"`
 
+	StartKey []byte `json:"start_key"`
+
 	// HotDegree records the hot region update times
 	HotDegree int `json:"hot_degree"`
 	// AntiCount used to eliminate some noise when remove region in cache
@@ -106,4 +108,10 @@ func (stat *HotPeerStat) Clone() *HotPeerStat {
 	ret.KeyRate = stat.GetKeyRate()
 	ret.rollingKeyRate = nil
 	return &ret
+}
+
+// sunzhuohang
+// GetStartKey returns StartKey if possible.
+func (stat *HotPeerStat) GetStartKey() []byte {
+	return stat.StartKey
 }

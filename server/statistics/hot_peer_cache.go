@@ -19,6 +19,10 @@ import (
 
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/pd/v4/server/core"
+
+	"github.com/pingcap/pd/v4/pkg/codec"
+	//"github.com/pkg/errors"
+
 )
 
 const (
@@ -132,6 +136,7 @@ func (f *hotPeerCache) CheckRegionFlow(region *core.RegionInfo, storesStats *Sto
 		newItem := &HotPeerStat{
 			StoreID:        storeID,
 			RegionID:       region.GetID(),
+			StartKey:       region.GetStartKey(),
 			Kind:           f.kind,
 			ByteRate:       byteRate,
 			KeyRate:        keyRate,
@@ -285,7 +290,7 @@ func (f *hotPeerCache) isRegionHotWithPeer(region *core.RegionInfo, peer *metapb
 func (f *hotPeerCache) updateHotPeerStat(newItem, oldItem *HotPeerStat, storesStats *StoresStats) *HotPeerStat {
 	thresholds := f.calcHotThresholds(storesStats, newItem.StoreID)
 	isHot := newItem.ByteRate >= thresholds[byteDim] ||
-		newItem.KeyRate >= thresholds[keyDim]
+		newItem.KeyRate >= thresholds[keyDim]  || IsKeyIndex(newItem.StartKey)
 
 	if newItem.needDelete {
 		return newItem
@@ -318,4 +323,16 @@ func (f *hotPeerCache) updateHotPeerStat(newItem, oldItem *HotPeerStat, storesSt
 	newItem.rollingKeyRate.Add(newItem.KeyRate)
 
 	return newItem
+}
+
+func  IsKeyIndex(key []byte) bool {
+	_, data, err := codec.DecodeBytes(key)
+	if err != nil {
+		//errors.Errorf("decode key meet error: %s, key: %s", err, string(res))
+		return false
+	}
+	if len(data) >= 19 && data[0]=='t' && data[9]=='_' && data[10]=='i' {
+		return true
+	}
+	return false
 }
