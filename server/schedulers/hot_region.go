@@ -15,6 +15,8 @@ package schedulers
 
 import (
 	"fmt"
+	"github.com/pingcap/pd/v4/server/cluster"
+	"k8s.io/klog"
 	"math"
 	"math/rand"
 	"net/http"
@@ -170,16 +172,16 @@ func (h *hotScheduler) allowBalanceRegion(cluster opt.Cluster) bool {
 	return h.OpController.OperatorCount(operator.OpHotRegion) < cluster.GetHotRegionScheduleLimit()
 }
 
-func (h *hotScheduler) Schedule(cluster opt.Cluster) []*operator.Operator {
+func (h *hotScheduler) Schedule(cluster opt.Cluster,raftCluster *cluster.RaftCluster) []*operator.Operator {
 	schedulerCounter.WithLabelValues(h.GetName(), "schedule").Inc()
-	return h.dispatch(h.types[h.r.Int()%len(h.types)], cluster)
+	return h.dispatch(h.types[h.r.Int()%len(h.types)], cluster, raftCluster)
 }
 
-func (h *hotScheduler) dispatch(typ rwType, cluster opt.Cluster) []*operator.Operator {
+func (h *hotScheduler) dispatch(typ rwType, cluster opt.Cluster,raftCluster *cluster.RaftCluster) []*operator.Operator {
 	h.Lock()
 	defer h.Unlock()
 
-	h.prepareForBalance(cluster)
+	h.prepareForBalance(cluster,raftCluster)
 
 	switch typ {
 	case read:
@@ -190,7 +192,7 @@ func (h *hotScheduler) dispatch(typ rwType, cluster opt.Cluster) []*operator.Ope
 	return nil
 }
 
-func (h *hotScheduler) prepareForBalance(cluster opt.Cluster) {
+func (h *hotScheduler) prepareForBalance(cluster opt.Cluster,raftCluster *cluster.RaftCluster) {
 	h.summaryPendingInfluence()
 
 	storesStat := cluster.GetStoresStats()
@@ -208,7 +210,7 @@ func (h *hotScheduler) prepareForBalance(cluster opt.Cluster) {
 			regionRead,
 			minHotDegree,
 			hotRegionThreshold,
-			read, core.LeaderKind, mixed)
+			read, core.LeaderKind, mixed, raftCluster)
 	}
 
 	{ // update write statistics
@@ -223,7 +225,7 @@ func (h *hotScheduler) prepareForBalance(cluster opt.Cluster) {
 			regionWrite,
 			minHotDegree,
 			hotRegionThreshold,
-			write, core.LeaderKind, mixed)
+			write, core.LeaderKind, mixed, raftCluster)
 
 		h.stLoadInfos[writePeer] = summaryStoresLoad(
 			storeByte,
@@ -232,7 +234,7 @@ func (h *hotScheduler) prepareForBalance(cluster opt.Cluster) {
 			regionWrite,
 			minHotDegree,
 			hotRegionThreshold,
-			write, core.RegionKind, mixed)
+			write, core.RegionKind, mixed, raftCluster)
 	}
 }
 
@@ -304,6 +306,7 @@ func summaryStoresLoad(
 	rwTy rwType,
 	kind core.ResourceKind,
 	hotPeerFilterTy hotPeerFilterType,
+	raftCluster *cluster.RaftCluster,
 ) map[uint64]*storeLoadDetail {
 	loadDetail := make(map[uint64]*storeLoadDetail, len(storeByteRate))
 	allByteSum := 0.0
@@ -319,7 +322,7 @@ func summaryStoresLoad(
 		{
 			byteSum := 0.0
 			keySum := 0.0
-			for _, peer := range filterHotPeers(kind, minHotDegree, hotRegionThreshold, storeHotPeers[id], hotPeerFilterTy) {
+			for _, peer := range filterHotPeers(kind, minHotDegree, hotRegionThreshold, storeHotPeers[id], hotPeerFilterTy, raftCluster) {
 				byteSum += peer.GetByteRate()
 				keySum += peer.GetKeyRate()
 				hotPeers = append(hotPeers, peer.Clone())
@@ -389,17 +392,93 @@ func filterHotPeers(
 	hotRegionThreshold [2]uint64,
 	peers []*statistics.HotPeerStat,
 	hotPeerFilterTy hotPeerFilterType,
+	raftCluster *cluster.RaftCluster,
 ) []*statistics.HotPeerStat {
 	ret := make([]*statistics.HotPeerStat, 0)
+	regionIDs := getTopK(raftCluster)
+
 	for _, peer := range peers {
 		if (kind == core.LeaderKind && !peer.IsLeader()) ||
 			peer.HotDegree < minHotDegree ||
-			isHotPeerFiltered(peer, hotRegionThreshold, hotPeerFilterTy) {
+			isHotPeerFiltered(peer, hotRegionThreshold, hotPeerFilterTy) &&
+			!(isExists(peer.RegionID,regionIDs) && (kind == core.LeaderKind && peer.IsLeader())) {
 			continue
 		}
 		ret = append(ret, peer)
 	}
 	return ret
+}
+
+const (
+	uint64Min     uint64 = 0
+	uint64Max     uint64 = ^uint64(0)
+)
+
+type HotRegionTable struct {
+	count    uint64
+	regionID []uint64
+}
+
+func getTopK(raftCluster *cluster.RaftCluster) []uint64 {
+	log.Info("Start getTopK")
+	regions := raftCluster.GetRegions()
+	if len(regions) <= 0 {
+		log.Info("not found region")
+		return []uint64{}
+	}
+	minrw := uint64Max
+	maxrw := uint64Min
+	tmp := make([]uint64, len(regions))
+	for index, v := range regions {
+		tmp[index] = v.GetRwBytesTotal() / uint64(v.GetApproximateSize())
+		if minrw > tmp[index] {
+			minrw = tmp[index]
+		}
+		if maxrw < tmp[index] {
+			maxrw = tmp[index]
+		}
+	}
+	segment := (maxrw - minrw) / uint64(len(regions))
+	if segment == 0 {
+		segment = 1
+	}
+	HotDegree := make([]HotRegionTable, len(regions)+1)
+	log.Info("len of HotDegree: ", zap.Any("len(HotDegree)", len(HotDegree)))
+	for index, v := range regions {
+		data := tmp[index]
+		if data == 0 {
+			continue
+		}
+		indexData := (maxrw - data) / segment
+		klog.Info("indexData: ", zap.Any("indexData", indexData))
+		HotDegree[indexData].count++
+		HotDegree[indexData].regionID = append(HotDegree[indexData].regionID, v.GetID())
+	}
+	k := 0
+	topk := len(regions) / 10
+	var retRegionID []uint64
+LOOP:
+	for _, h := range HotDegree {
+		for _, i := range h.regionID {
+			retRegionID = append(retRegionID, i)
+			k++
+			if k == topk {
+				break LOOP
+			}
+		}
+	}
+	//fmt.Println(retRegionID)
+	log.Info("GetTopK", zap.Any("TopK regionIDs", retRegionID))
+	return retRegionID
+}
+
+func isExists(ID uint64, IDs []uint64) bool {
+	for _, id := range IDs {
+		if id == ID {
+			return true
+		}
+	}
+	return false
 }
 
 func isHotPeerFiltered(peer *statistics.HotPeerStat, hotRegionThreshold [2]uint64, hotPeerFilterTy hotPeerFilterType) bool {
