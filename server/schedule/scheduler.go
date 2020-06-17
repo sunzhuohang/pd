@@ -15,7 +15,6 @@ package schedule
 
 import (
 	"encoding/json"
-	"github.com/pingcap/pd/v4/server/cluster"
 	"net/http"
 	"strings"
 	"time"
@@ -39,7 +38,7 @@ type Scheduler interface {
 	GetNextInterval(interval time.Duration) time.Duration
 	Prepare(cluster opt.Cluster) error
 	Cleanup(cluster opt.Cluster)
-	Schedule(cluster opt.Cluster,raftCluster *cluster.RaftCluster) []*operator.Operator
+	Schedule(cluster opt.Cluster) []*operator.Operator
 	IsScheduleAllowed(cluster opt.Cluster) bool
 }
 

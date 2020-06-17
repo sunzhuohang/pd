@@ -15,7 +15,6 @@ package schedulers
 
 import (
 	"fmt"
-	"github.com/pingcap/pd/v4/server/cluster"
 	"k8s.io/klog"
 	"math"
 	"math/rand"
@@ -172,16 +171,16 @@ func (h *hotScheduler) allowBalanceRegion(cluster opt.Cluster) bool {
 	return h.OpController.OperatorCount(operator.OpHotRegion) < cluster.GetHotRegionScheduleLimit()
 }
 
-func (h *hotScheduler) Schedule(cluster opt.Cluster,raftCluster *cluster.RaftCluster) []*operator.Operator {
+func (h *hotScheduler) Schedule(cluster opt.Cluster) []*operator.Operator {
 	schedulerCounter.WithLabelValues(h.GetName(), "schedule").Inc()
-	return h.dispatch(h.types[h.r.Int()%len(h.types)], cluster, raftCluster)
+	return h.dispatch(h.types[h.r.Int()%len(h.types)], cluster)
 }
 
-func (h *hotScheduler) dispatch(typ rwType, cluster opt.Cluster,raftCluster *cluster.RaftCluster) []*operator.Operator {
+func (h *hotScheduler) dispatch(typ rwType, cluster opt.Cluster) []*operator.Operator {
 	h.Lock()
 	defer h.Unlock()
 
-	h.prepareForBalance(cluster,raftCluster)
+	h.prepareForBalance(cluster)
 
 	switch typ {
 	case read:
@@ -192,10 +191,11 @@ func (h *hotScheduler) dispatch(typ rwType, cluster opt.Cluster,raftCluster *clu
 	return nil
 }
 
-func (h *hotScheduler) prepareForBalance(cluster opt.Cluster,raftCluster *cluster.RaftCluster) {
+func (h *hotScheduler) prepareForBalance(cluster opt.Cluster) {
 	h.summaryPendingInfluence()
 
 	storesStat := cluster.GetStoresStats()
+	regions := cluster.GetRegions()
 
 	minHotDegree := cluster.GetHotRegionCacheHitsThreshold()
 	{ // update read statistics
@@ -210,7 +210,7 @@ func (h *hotScheduler) prepareForBalance(cluster opt.Cluster,raftCluster *cluste
 			regionRead,
 			minHotDegree,
 			hotRegionThreshold,
-			read, core.LeaderKind, mixed, raftCluster)
+			read, core.LeaderKind, mixed, regions)
 	}
 
 	{ // update write statistics
@@ -225,7 +225,7 @@ func (h *hotScheduler) prepareForBalance(cluster opt.Cluster,raftCluster *cluste
 			regionWrite,
 			minHotDegree,
 			hotRegionThreshold,
-			write, core.LeaderKind, mixed, raftCluster)
+			write, core.LeaderKind, mixed, regions)
 
 		h.stLoadInfos[writePeer] = summaryStoresLoad(
 			storeByte,
@@ -234,7 +234,7 @@ func (h *hotScheduler) prepareForBalance(cluster opt.Cluster,raftCluster *cluste
 			regionWrite,
 			minHotDegree,
 			hotRegionThreshold,
-			write, core.RegionKind, mixed, raftCluster)
+			write, core.RegionKind, mixed, regions)
 	}
 }
 
@@ -306,7 +306,7 @@ func summaryStoresLoad(
 	rwTy rwType,
 	kind core.ResourceKind,
 	hotPeerFilterTy hotPeerFilterType,
-	raftCluster *cluster.RaftCluster,
+	regions []*core.RegionInfo,
 ) map[uint64]*storeLoadDetail {
 	loadDetail := make(map[uint64]*storeLoadDetail, len(storeByteRate))
 	allByteSum := 0.0
@@ -322,7 +322,7 @@ func summaryStoresLoad(
 		{
 			byteSum := 0.0
 			keySum := 0.0
-			for _, peer := range filterHotPeers(kind, minHotDegree, hotRegionThreshold, storeHotPeers[id], hotPeerFilterTy, raftCluster) {
+			for _, peer := range filterHotPeers(kind, minHotDegree, hotRegionThreshold, storeHotPeers[id], hotPeerFilterTy, regions) {
 				byteSum += peer.GetByteRate()
 				keySum += peer.GetKeyRate()
 				hotPeers = append(hotPeers, peer.Clone())
@@ -392,10 +392,10 @@ func filterHotPeers(
 	hotRegionThreshold [2]uint64,
 	peers []*statistics.HotPeerStat,
 	hotPeerFilterTy hotPeerFilterType,
-	raftCluster *cluster.RaftCluster,
+	regions []*core.RegionInfo,
 ) []*statistics.HotPeerStat {
 	ret := make([]*statistics.HotPeerStat, 0)
-	regionIDs := getTopK(raftCluster)
+	regionIDs := getTopK(regions)
 
 	for _, peer := range peers {
 		if (kind == core.LeaderKind && !peer.IsLeader()) ||
@@ -419,9 +419,8 @@ type HotRegionTable struct {
 	regionID []uint64
 }
 
-func getTopK(raftCluster *cluster.RaftCluster) []uint64 {
+func getTopK(regions []*core.RegionInfo) []uint64 {
 	log.Info("Start getTopK")
-	regions := raftCluster.GetRegions()
 	if len(regions) <= 0 {
 		log.Info("not found region")
 		return []uint64{}
