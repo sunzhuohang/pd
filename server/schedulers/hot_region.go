@@ -454,7 +454,7 @@ func getTopK(regions []*core.RegionInfo) []uint64 {
 		HotDegree[indexData].regionID = append(HotDegree[indexData].regionID, v.GetID())
 	}
 	k := 0
-	topk := len(regions) / 10
+	topk := len(regions) / 3
 	var retRegionID []uint64
 LOOP:
 	for _, h := range HotDegree {
