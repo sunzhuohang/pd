@@ -406,6 +406,11 @@ func filterHotPeers(
 		}
 		ret = append(ret, peer)
 	}
+	var retRegionID []uint64
+	for _, id := range ret{
+		retRegionID = append(retRegionID, id.RegionID)
+	}
+	log.Info("GetTopK", zap.Any("TopK regionIDs", retRegionID))
 	return ret
 }
 
@@ -466,8 +471,7 @@ LOOP:
 			}
 		}
 	}
-	//fmt.Println(retRegionID)
-	log.Info("GetTopK", zap.Any("TopK regionIDs", retRegionID))
+	//log.Info("GetTopK", zap.Any("TopK regionIDs", retRegionID))
 	return retRegionID
 }
 
