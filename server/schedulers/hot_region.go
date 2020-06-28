@@ -15,7 +15,6 @@ package schedulers
 
 import (
 	"fmt"
-	"k8s.io/klog"
 	"math"
 	"math/rand"
 	"net/http"
@@ -454,7 +453,7 @@ func getTopK(regions []*core.RegionInfo) []uint64 {
 			continue
 		}
 		indexData := (maxrw - data) / segment
-		klog.Info("indexData: ", zap.Any("indexData", indexData))
+		//log.Info("indexData: ", zap.Any("indexData", indexData))
 		HotDegree[indexData].count++
 		HotDegree[indexData].regionID = append(HotDegree[indexData].regionID, v.GetID())
 	}
