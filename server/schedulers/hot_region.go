@@ -400,13 +400,13 @@ func filterHotPeers(
 		if (kind == core.LeaderKind && !peer.IsLeader()) ||
 			peer.HotDegree < minHotDegree ||
 			isHotPeerFiltered(peer, hotRegionThreshold, hotPeerFilterTy) &&
-			!(isExists(peer.RegionID,regionIDs) && (kind == core.LeaderKind && peer.IsLeader())) {
+				!(isExists(peer.RegionID, regionIDs) && (kind == core.LeaderKind && peer.IsLeader())) {
 			continue
 		}
 		ret = append(ret, peer)
 	}
 	var retRegionID []uint64
-	for _, id := range ret{
+	for _, id := range ret {
 		retRegionID = append(retRegionID, id.RegionID)
 	}
 	log.Info("GetTopK", zap.Any("TopK regionIDs", retRegionID))
@@ -414,8 +414,8 @@ func filterHotPeers(
 }
 
 const (
-	uint64Min     uint64 = 0
-	uint64Max     uint64 = ^uint64(0)
+	uint64Min uint64 = 0
+	uint64Max uint64 = ^uint64(0)
 )
 
 type HotRegionTable struct {
@@ -433,7 +433,11 @@ func getTopK(regions []*core.RegionInfo) []uint64 {
 	maxrw := uint64Min
 	tmp := make([]uint64, len(regions))
 	for index, v := range regions {
-		tmp[index] = v.GetRwBytesTotal() / uint64(v.GetApproximateSize())
+		tmpSize := uint64(v.GetApproximateSize()) //maybe 0
+		if tmpSize == 0 {
+			tmpSize = 1
+		}
+		tmp[index] = v.GetRwBytesTotal() / tmpSize
 		if minrw > tmp[index] {
 			minrw = tmp[index]
 		}
