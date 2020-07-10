@@ -899,14 +899,24 @@ func (bs *balanceSolver) filterDstStores() map[uint64]*storeLoadDetail {
 
 	ret := make(map[uint64]*storeLoadDetail, len(candidates))
 	for _, store := range candidates {
-		if filter.Target(bs.cluster, store, filters) {
-			detail := bs.stLoadDetail[store.GetID()]
-			if detail.LoadPred.max().ByteRate*bs.sche.conf.GetDstToleranceRatio() < detail.LoadPred.Future.ExpByteRate &&
-				detail.LoadPred.max().KeyRate*bs.sche.conf.GetDstToleranceRatio() < detail.LoadPred.Future.ExpKeyRate {
-				ret[store.GetID()] = bs.stLoadDetail[store.GetID()]
-				balanceHotRegionCounter.WithLabelValues("dst-store-succ", strconv.FormatUint(store.GetID(), 10)).Inc()
+		//values := []string{filter.SpecialUseHotRegion}
+		//constraint := &placement.LabelConstraint{Key: filter.SpecialUseKey, Op: "in", Values: values}
+		//if constraint.MatchStore(store) {
+		//}
+		if store.GetLabelValue(filter.SpecialUseKey) == filter.SpecialUseHotRegion &&
+			store != bs.cluster.GetStore(bs.cur.srcStoreID) {
+			ret[store.GetID()] = bs.stLoadDetail[store.GetID()]
+			balanceHotRegionCounter.WithLabelValues("specialuse-dst-store-succ", strconv.FormatUint(store.GetID(), 10)).Inc()
+		} else {
+			if filter.Target(bs.cluster, store, filters) {
+				detail := bs.stLoadDetail[store.GetID()]
+				if detail.LoadPred.max().ByteRate*bs.sche.conf.GetDstToleranceRatio() < detail.LoadPred.Future.ExpByteRate &&
+					detail.LoadPred.max().KeyRate*bs.sche.conf.GetDstToleranceRatio() < detail.LoadPred.Future.ExpKeyRate {
+					ret[store.GetID()] = bs.stLoadDetail[store.GetID()]
+					balanceHotRegionCounter.WithLabelValues("dst-store-succ", strconv.FormatUint(store.GetID(), 10)).Inc()
+				}
+				balanceHotRegionCounter.WithLabelValues("dst-store-fail", strconv.FormatUint(store.GetID(), 10)).Inc()
 			}
-			balanceHotRegionCounter.WithLabelValues("dst-store-fail", strconv.FormatUint(store.GetID(), 10)).Inc()
 		}
 	}
 	return ret
@@ -938,6 +948,9 @@ func (bs *balanceSolver) calcProgressiveRank() {
 		byteHot := peer.GetByteRate() > bs.sche.conf.GetMinHotByteRate()
 		greatDecRatio, minorDecRatio := bs.sche.conf.GetGreatDecRatio(), bs.sche.conf.GetMinorGreatDecRatio()
 		switch {
+		case bs.cluster.GetStore(bs.cur.dstStoreID).GetLabelValue(filter.SpecialUseKey) == filter.SpecialUseHotRegion:
+			// SpecialUse store has the lowest rank
+			rank = -4
 		case byteHot && byteDecRatio <= greatDecRatio && keyHot && keyDecRatio <= greatDecRatio:
 			// Both byte rate and key rate are balanced, the best choice.
 			rank = -3
