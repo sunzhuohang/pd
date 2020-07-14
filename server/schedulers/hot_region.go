@@ -904,18 +904,17 @@ func (bs *balanceSolver) filterDstStores() map[uint64]*storeLoadDetail {
 		return nil
 	}
 
-	//ret := make(map[uint64]*storeLoadDetail, len(candidates))
-	ret := make(map[uint64]*storeLoadDetail)
+	ret := make(map[uint64]*storeLoadDetail, len(candidates))
 	for _, store := range candidates {
 		//values := []string{filter.SpecialUseHotRegion}
 		//constraint := &placement.LabelConstraint{Key: filter.SpecialUseKey, Op: "in", Values: values}
 		//if constraint.MatchStore(store) {
 		//}
-		if store.GetLabelValue(filter.SpecialUseKey) == filter.SpecialUseHotRegion &&
-			store != bs.cluster.GetStore(bs.cur.srcStoreID) {
-			ret[store.GetID()] = bs.stLoadDetail[store.GetID()]
-			balanceHotRegionCounter.WithLabelValues("specialuse-dst-store-succ", strconv.FormatUint(store.GetID(), 10)).Inc()
-		} else {
+		//if store.GetLabelValue(filter.SpecialUseKey) == filter.SpecialUseHotRegion &&
+			//store != bs.cluster.GetStore(bs.cur.srcStoreID) {
+			//ret[store.GetID()] = bs.stLoadDetail[store.GetID()]
+			//balanceHotRegionCounter.WithLabelValues("specialuse-dst-store-succ", strconv.FormatUint(store.GetID(), 10)).Inc()
+		//} else {
 			if filter.Target(bs.cluster, store, filters) {
 				detail := bs.stLoadDetail[store.GetID()]
 				if detail.LoadPred.max().ByteRate*bs.sche.conf.GetDstToleranceRatio() < detail.LoadPred.Future.ExpByteRate &&
@@ -925,7 +924,7 @@ func (bs *balanceSolver) filterDstStores() map[uint64]*storeLoadDetail {
 				}
 				balanceHotRegionCounter.WithLabelValues("dst-store-fail", strconv.FormatUint(store.GetID(), 10)).Inc()
 			}
-		}
+		//}
 	}
 	return ret
 }
