@@ -910,11 +910,12 @@ func (bs *balanceSolver) filterDstStores() map[uint64]*storeLoadDetail {
 		//constraint := &placement.LabelConstraint{Key: filter.SpecialUseKey, Op: "in", Values: values}
 		//if constraint.MatchStore(store) {
 		//}
-		//if store.GetLabelValue(filter.SpecialUseKey) == filter.SpecialUseHotRegion &&
-			//store != bs.cluster.GetStore(bs.cur.srcStoreID) {
-			//ret[store.GetID()] = bs.stLoadDetail[store.GetID()]
-			//balanceHotRegionCounter.WithLabelValues("specialuse-dst-store-succ", strconv.FormatUint(store.GetID(), 10)).Inc()
-		//} else {
+		if store.GetLabelValue(filter.SpecialUseKey) == filter.SpecialUseHotRegion &&
+			store != bs.cluster.GetStore(bs.cur.srcStoreID) {
+			ret[store.GetID()] = bs.stLoadDetail[store.GetID()]
+			log.Info("szh des", zap.Any("store.GetID()",store.GetID()))
+			balanceHotRegionCounter.WithLabelValues("specialuse-dst-store-succ", strconv.FormatUint(store.GetID(), 10)).Inc()
+		} else {
 			if filter.Target(bs.cluster, store, filters) {
 				detail := bs.stLoadDetail[store.GetID()]
 				if detail.LoadPred.max().ByteRate*bs.sche.conf.GetDstToleranceRatio() < detail.LoadPred.Future.ExpByteRate &&
@@ -924,7 +925,7 @@ func (bs *balanceSolver) filterDstStores() map[uint64]*storeLoadDetail {
 				}
 				balanceHotRegionCounter.WithLabelValues("dst-store-fail", strconv.FormatUint(store.GetID(), 10)).Inc()
 			}
-		//}
+		}
 	}
 	return ret
 }
@@ -933,6 +934,7 @@ func (bs *balanceSolver) filterDstStores() map[uint64]*storeLoadDetail {
 // See the comments of `solution.progressiveRank` for more about progressive rank.
 func (bs *balanceSolver) calcProgressiveRank() {
 	srcLd := bs.stLoadDetail[bs.cur.srcStoreID].LoadPred.min()
+	log.Info("szh rank", zap.Any("bs.cur.dstStoreID", bs.cur.dstStoreID))
 	dstLd := bs.stLoadDetail[bs.cur.dstStoreID].LoadPred.max()
 	peer := bs.cur.srcPeerStat
 	rank := int64(0)
