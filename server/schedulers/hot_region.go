@@ -904,7 +904,8 @@ func (bs *balanceSolver) filterDstStores() map[uint64]*storeLoadDetail {
 		return nil
 	}
 
-	ret := make(map[uint64]*storeLoadDetail, len(candidates))
+	//ret := make(map[uint64]*storeLoadDetail, len(candidates))
+	ret := make(map[uint64]*storeLoadDetail)
 	for _, store := range candidates {
 		//values := []string{filter.SpecialUseHotRegion}
 		//constraint := &placement.LabelConstraint{Key: filter.SpecialUseKey, Op: "in", Values: values}
