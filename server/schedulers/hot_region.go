@@ -321,7 +321,7 @@ func summaryStoresLoad(
 		{
 			byteSum := 0.0
 			keySum := 0.0
-			for _, peer := range filterHotPeers(kind, minHotDegree, hotRegionThreshold, storeHotPeers[id], hotPeerFilterTy,regions) {
+			for _, peer := range filterHotPeers(kind, minHotDegree, hotRegionThreshold, storeHotPeers[id], hotPeerFilterTy, regions) {
 				byteSum += peer.GetByteRate()
 				keySum += peer.GetKeyRate()
 				hotPeers = append(hotPeers, peer.Clone())
@@ -394,15 +394,104 @@ func filterHotPeers(
 	regions []*core.RegionInfo,
 ) []*statistics.HotPeerStat {
 	ret := make([]*statistics.HotPeerStat, 0)
+	//regionIDs := getTopK(regions)
+
 	for _, peer := range peers {
 		if (kind == core.LeaderKind && !peer.IsLeader()) ||
 			peer.HotDegree < minHotDegree ||
 			isHotPeerFiltered(peer, hotRegionThreshold, hotPeerFilterTy) {
 			continue
 		}
+		/*
+			if (kind == core.LeaderKind && !peer.IsLeader()) ||
+				peer.HotDegree < minHotDegree ||
+				isHotPeerFiltered(peer, hotRegionThreshold, hotPeerFilterTy) &&
+					!(isExists(peer.RegionID, regionIDs) && (kind == core.LeaderKind && peer.IsLeader())) {
+				continue
+			}
+		*/
 		ret = append(ret, peer)
 	}
+	var retRegionID []uint64
+	for _, id := range ret {
+		retRegionID = append(retRegionID, id.RegionID)
+	}
+	log.Info("GetTopK", zap.Any("TopK regionIDs", retRegionID))
 	return ret
+}
+
+const (
+	uint64Min uint64 = 0
+	uint64Max uint64 = ^uint64(0)
+)
+
+type HotRegionTable struct {
+	count    uint64
+	regionID []uint64
+}
+
+func getTopK(regions []*core.RegionInfo) []uint64 {
+	log.Info("Start getTopK")
+	if len(regions) <= 0 {
+		log.Info("not found region")
+		return []uint64{}
+	}
+	minrw := uint64Max
+	maxrw := uint64Min
+	tmp := make([]uint64, len(regions))
+	for index, v := range regions {
+		tmpSize := uint64(v.GetApproximateSize()) //maybe 0
+		if tmpSize == 0 {
+			tmpSize = 1
+		}
+		tmp[index] = v.GetRwBytesTotal() / tmpSize
+		if minrw > tmp[index] {
+			minrw = tmp[index]
+		}
+		if maxrw < tmp[index] {
+			maxrw = tmp[index]
+		}
+	}
+	segment := (maxrw - minrw) / uint64(len(regions))
+	if segment == 0 {
+		segment = 1
+	}
+	HotDegree := make([]HotRegionTable, len(regions)+1)
+	log.Info("len of HotDegree: ", zap.Any("len(HotDegree)", len(HotDegree)))
+	for index, v := range regions {
+		data := tmp[index]
+		if data == 0 {
+			continue
+		}
+		indexData := (maxrw - data) / segment
+		//log.Info("indexData: ", zap.Any("indexData", indexData))
+		HotDegree[indexData].count++
+		HotDegree[indexData].regionID = append(HotDegree[indexData].regionID, v.GetID())
+	}
+	k := 0
+	topk := len(regions) / 4
+	var retRegionID []uint64
+LOOP:
+	for _, h := range HotDegree {
+		for _, i := range h.regionID {
+			retRegionID = append(retRegionID, i)
+			k++
+			if k == topk {
+				break LOOP
+			}
+		}
+	}
+	//log.Info("GetTopK", zap.Any("TopK regionIDs", retRegionID))
+	return retRegionID
+}
+
+func isExists(ID uint64, IDs []uint64) bool {
+	for _, id := range IDs {
+		if id == ID {
+			return true
+		}
+	}
+	return false
 }
 
 func isHotPeerFiltered(peer *statistics.HotPeerStat, hotRegionThreshold [2]uint64, hotPeerFilterTy hotPeerFilterType) bool {
@@ -812,14 +901,21 @@ func (bs *balanceSolver) pickDstStores(filters []filter.Filter, candidates []*co
 	ret := make(map[uint64]*storeLoadDetail, len(candidates))
 	dstToleranceRatio := bs.sche.conf.GetDstToleranceRatio()
 	for _, store := range candidates {
-		if filter.Target(bs.cluster, store, filters) {
-			detail := bs.stLoadDetail[store.GetID()]
-			if detail.LoadPred.max().ByteRate*dstToleranceRatio < detail.LoadPred.Future.ExpByteRate &&
-				detail.LoadPred.max().KeyRate*dstToleranceRatio < detail.LoadPred.Future.ExpKeyRate {
-				ret[store.GetID()] = bs.stLoadDetail[store.GetID()]
-				balanceHotRegionCounter.WithLabelValues("dst-store-succ", strconv.FormatUint(store.GetID(), 10)).Inc()
+		if store.GetLabelValue(filter.SpecialUseKey) == filter.SpecialUseHotRegion &&
+			store != bs.cluster.GetStore(bs.cur.srcStoreID) {
+			ret[store.GetID()] = bs.stLoadDetail[store.GetID()]
+			log.Info("szh des", zap.Any("store.GetID()",store.GetID()))
+			balanceHotRegionCounter.WithLabelValues("specialuse-dst-store-succ", strconv.FormatUint(store.GetID(), 10)).Inc()
+		} else {
+			if filter.Target(bs.cluster, store, filters) {
+				detail := bs.stLoadDetail[store.GetID()]
+				if detail.LoadPred.max().ByteRate*dstToleranceRatio < detail.LoadPred.Future.ExpByteRate &&
+					detail.LoadPred.max().KeyRate*dstToleranceRatio < detail.LoadPred.Future.ExpKeyRate {
+					ret[store.GetID()] = bs.stLoadDetail[store.GetID()]
+					balanceHotRegionCounter.WithLabelValues("dst-store-succ", strconv.FormatUint(store.GetID(), 10)).Inc()
+				}
+				balanceHotRegionCounter.WithLabelValues("dst-store-fail", strconv.FormatUint(store.GetID(), 10)).Inc()
 			}
-			balanceHotRegionCounter.WithLabelValues("dst-store-fail", strconv.FormatUint(store.GetID(), 10)).Inc()
 		}
 	}
 	return ret
@@ -851,6 +947,9 @@ func (bs *balanceSolver) calcProgressiveRank() {
 		byteHot := peer.GetByteRate() > bs.sche.conf.GetMinHotByteRate()
 		greatDecRatio, minorDecRatio := bs.sche.conf.GetGreatDecRatio(), bs.sche.conf.GetMinorGreatDecRatio()
 		switch {
+		case bs.cluster.GetStore(bs.cur.dstStoreID).GetLabelValue(filter.SpecialUseKey) == filter.SpecialUseHotRegion:
+			// SpecialUse store has the lowest rank
+			rank = -4
 		case byteHot && byteDecRatio <= greatDecRatio && keyHot && keyDecRatio <= greatDecRatio:
 			// Both byte rate and key rate are balanced, the best choice.
 			rank = -3
