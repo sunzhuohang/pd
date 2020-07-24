@@ -194,6 +194,7 @@ func (h *hotScheduler) prepareForBalance(cluster opt.Cluster) {
 	h.summaryPendingInfluence()
 
 	storesStat := cluster.GetStoresStats()
+	regions := cluster.GetRegions()
 
 	minHotDegree := cluster.GetHotRegionCacheHitsThreshold()
 	{ // update read statistics
@@ -208,7 +209,7 @@ func (h *hotScheduler) prepareForBalance(cluster opt.Cluster) {
 			regionRead,
 			minHotDegree,
 			hotRegionThreshold,
-			read, core.LeaderKind, mixed)
+			read, core.LeaderKind, mixed, regions)
 	}
 
 	{ // update write statistics
@@ -223,7 +224,7 @@ func (h *hotScheduler) prepareForBalance(cluster opt.Cluster) {
 			regionWrite,
 			minHotDegree,
 			hotRegionThreshold,
-			write, core.LeaderKind, mixed)
+			write, core.LeaderKind, mixed, regions)
 
 		h.stLoadInfos[writePeer] = summaryStoresLoad(
 			storeByte,
@@ -232,7 +233,7 @@ func (h *hotScheduler) prepareForBalance(cluster opt.Cluster) {
 			regionWrite,
 			minHotDegree,
 			hotRegionThreshold,
-			write, core.RegionKind, mixed)
+			write, core.RegionKind, mixed, regions)
 	}
 }
 
@@ -304,6 +305,7 @@ func summaryStoresLoad(
 	rwTy rwType,
 	kind core.ResourceKind,
 	hotPeerFilterTy hotPeerFilterType,
+	regions []*core.RegionInfo,
 ) map[uint64]*storeLoadDetail {
 	loadDetail := make(map[uint64]*storeLoadDetail, len(storeByteRate))
 	allByteSum := 0.0
@@ -319,7 +321,7 @@ func summaryStoresLoad(
 		{
 			byteSum := 0.0
 			keySum := 0.0
-			for _, peer := range filterHotPeers(kind, minHotDegree, hotRegionThreshold, storeHotPeers[id], hotPeerFilterTy) {
+			for _, peer := range filterHotPeers(kind, minHotDegree, hotRegionThreshold, storeHotPeers[id], hotPeerFilterTy,regions) {
 				byteSum += peer.GetByteRate()
 				keySum += peer.GetKeyRate()
 				hotPeers = append(hotPeers, peer.Clone())
@@ -389,6 +391,7 @@ func filterHotPeers(
 	hotRegionThreshold [2]uint64,
 	peers []*statistics.HotPeerStat,
 	hotPeerFilterTy hotPeerFilterType,
+	regions []*core.RegionInfo,
 ) []*statistics.HotPeerStat {
 	ret := make([]*statistics.HotPeerStat, 0)
 	for _, peer := range peers {
