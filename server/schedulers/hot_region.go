@@ -394,22 +394,15 @@ func filterHotPeers(
 	regions []*core.RegionInfo,
 ) []*statistics.HotPeerStat {
 	ret := make([]*statistics.HotPeerStat, 0)
-	//regionIDs := getTopK(regions)
+	regionIDs := getTopK(regions)
 
 	for _, peer := range peers {
 		if (kind == core.LeaderKind && !peer.IsLeader()) ||
 			peer.HotDegree < minHotDegree ||
-			isHotPeerFiltered(peer, hotRegionThreshold, hotPeerFilterTy) {
+			isHotPeerFiltered(peer, hotRegionThreshold, hotPeerFilterTy) &&
+				!(isExists(peer.RegionID, regionIDs) && (kind == core.LeaderKind && peer.IsLeader())) {
 			continue
 		}
-		/*
-			if (kind == core.LeaderKind && !peer.IsLeader()) ||
-				peer.HotDegree < minHotDegree ||
-				isHotPeerFiltered(peer, hotRegionThreshold, hotPeerFilterTy) &&
-					!(isExists(peer.RegionID, regionIDs) && (kind == core.LeaderKind && peer.IsLeader())) {
-				continue
-			}
-		*/
 		ret = append(ret, peer)
 	}
 	var retRegionID []uint64
@@ -481,7 +474,7 @@ LOOP:
 			}
 		}
 	}
-	//log.Info("GetTopK", zap.Any("TopK regionIDs", retRegionID))
+	log.Info("GetTopK", zap.Any("TopK regionIDs", retRegionID))
 	return retRegionID
 }
 
