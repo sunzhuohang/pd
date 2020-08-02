@@ -151,7 +151,7 @@ func (r *RegionInfo) Clone(opts ...RegionCreateOption) *RegionInfo {
 		approximateKeys:   r.approximateKeys,
 		interval:          proto.Clone(r.interval).(*pdpb.TimeInterval),
 		replicationStatus: r.replicationStatus,
-		rwBytesTotal:      r.rwBytesTotal,
+		//rwBytesTotal:      r.rwBytesTotal,
 	}
 
 	for _, opt := range opts {

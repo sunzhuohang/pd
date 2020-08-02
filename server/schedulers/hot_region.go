@@ -405,11 +405,11 @@ func filterHotPeers(
 		}
 		ret = append(ret, peer)
 	}
-	var retRegionID []uint64
+	var chooseIDs []uint64
 	for _, id := range ret {
-		retRegionID = append(retRegionID, id.RegionID)
+		chooseIDs = append(chooseIDs, id.RegionID)
 	}
-	log.Info("GetTopK", zap.Any("TopK regionIDs", retRegionID))
+	//log.Info("GetTopK", zap.Any("ChooseIDs", chooseIDs))
 	return ret
 }
 
@@ -424,7 +424,7 @@ type HotRegionTable struct {
 }
 
 func getTopK(regions []*core.RegionInfo) []uint64 {
-	log.Info("Start getTopK")
+	//log.Info("Start getTopK")
 	if len(regions) <= 0 {
 		log.Info("not found region")
 		return []uint64{}
@@ -450,7 +450,7 @@ func getTopK(regions []*core.RegionInfo) []uint64 {
 		segment = 1
 	}
 	HotDegree := make([]HotRegionTable, len(regions)+1)
-	log.Info("len of HotDegree: ", zap.Any("len(HotDegree)", len(HotDegree)))
+	//log.Info("len of HotDegree: ", zap.Any("len(HotDegree)", len(HotDegree)))
 	for index, v := range regions {
 		data := tmp[index]
 		if data == 0 {
@@ -474,7 +474,7 @@ LOOP:
 			}
 		}
 	}
-	log.Info("GetTopK", zap.Any("TopK regionIDs", retRegionID))
+	//log.Info("GetTopK", zap.Any("TopK regionIDs", retRegionID))
 	return retRegionID
 }
 
@@ -897,7 +897,7 @@ func (bs *balanceSolver) pickDstStores(filters []filter.Filter, candidates []*co
 		if store.GetLabelValue(filter.SpecialUseKey) == filter.SpecialUseHotRegion &&
 			store != bs.cluster.GetStore(bs.cur.srcStoreID) {
 			ret[store.GetID()] = bs.stLoadDetail[store.GetID()]
-			log.Info("szh des", zap.Any("store.GetID()",store.GetID()))
+			//log.Info("szh des", zap.Any("store.GetID()",store.GetID()))
 			balanceHotRegionCounter.WithLabelValues("specialuse-dst-store-succ", strconv.FormatUint(store.GetID(), 10)).Inc()
 		} else {
 			if filter.Target(bs.cluster, store, filters) {
