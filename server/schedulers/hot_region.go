@@ -433,7 +433,7 @@ func getTopK(regions []*core.RegionInfo) []uint64 {
 			tmpSize = 1
 		}
 		tmp[index] = float64(v.GetRwBytesTotal()) / float64(tmpSize)
-		if minrw > tmp[index] || minrw == 0 {
+		if (minrw > tmp[index]) || (minrw == 0) {
 			minrw = tmp[index]
 		}
 		if maxrw < tmp[index] {
