@@ -424,8 +424,8 @@ func getTopK(regions []*core.RegionInfo) []uint64 {
 		log.Info("not found region")
 		return []uint64{}
 	}
-	var minrw float64 = 0
-	var maxrw float64 = 0
+	var minrw float64 = -1
+	var maxrw float64 = -1
 	tmp := make([]float64, len(regions))
 	for index, v := range regions {
 		tmpSize := v.GetApproximateSize() //maybe 0
@@ -433,7 +433,7 @@ func getTopK(regions []*core.RegionInfo) []uint64 {
 			tmpSize = 1
 		}
 		tmp[index] = float64(v.GetRwBytesTotal()) / float64(tmpSize)
-		if (minrw > tmp[index]) || (minrw == 0) {
+		if (minrw > tmp[index]) || (minrw == -1) {
 			minrw = tmp[index]
 		}
 		if maxrw < tmp[index] {
