@@ -413,11 +413,6 @@ func filterHotPeers(
 	return ret
 }
 
-const (
-	uint64Min uint64 = 0
-	uint64Max uint64 = ^uint64(0)
-)
-
 type HotRegionTable struct {
 	count    uint64
 	regionID []uint64
@@ -429,28 +424,27 @@ func getTopK(regions []*core.RegionInfo) []uint64 {
 		log.Info("not found region")
 		return []uint64{}
 	}
-	minrw := uint64Max
-	maxrw := uint64Min
-	tmp := make([]uint64, len(regions))
+	var minrw float64 = 0
+	var maxrw float64 = 0
+	tmp := make([]float64, len(regions))
 	for index, v := range regions {
-		tmpSize := uint64(v.GetApproximateSize()) //maybe 0
+		tmpSize := v.GetApproximateSize() //maybe 0
 		if tmpSize == 0 {
 			tmpSize = 1
 		}
-		tmp[index] = v.GetRwBytesTotal() / tmpSize
-		if minrw > tmp[index] {
+		tmp[index] = float64(v.GetRwBytesTotal()) / float64(tmpSize)
+		if minrw > tmp[index] || minrw == 0 {
 			minrw = tmp[index]
 		}
 		if maxrw < tmp[index] {
 			maxrw = tmp[index]
 		}
 	}
-	segment := (maxrw - minrw) / uint64(len(regions))
+	segment := (maxrw - minrw) / float64(len(regions))
 	if segment == 0 {
 		segment = 1
 	}
-	HotDegree := make([]HotRegionTable, len(regions)+1)
-	log.Info("len of HotDegree: ", zap.Any("len(HotDegree)", len(HotDegree)))
+	HotDegree := make([]HotRegionTable, len(regions)+10)
 	for index, v := range regions {
 		data := tmp[index]
 		if data == 0 {
@@ -465,8 +459,8 @@ func getTopK(regions []*core.RegionInfo) []uint64 {
 			log.Info("data: ", zap.Any("data", data))
 			log.Info("indexData: ", zap.Any("indexData", indexData))
 		}
-		HotDegree[indexData].count++
-		HotDegree[indexData].regionID = append(HotDegree[indexData].regionID, v.GetID())
+		HotDegree[int(indexData)].count++
+		HotDegree[int(indexData)].regionID = append(HotDegree[int(indexData)].regionID, v.GetID())
 	}
 	k := 0
 	topk := len(regions) / 4
@@ -925,6 +919,8 @@ func (bs *balanceSolver) pickDstStores(filters []filter.Filter, candidates []*co
 // See the comments of `solution.progressiveRank` for more about progressive rank.
 func (bs *balanceSolver) calcProgressiveRank() {
 	srcLd := bs.stLoadDetail[bs.cur.srcStoreID].LoadPred.min()
+	log.Info("bs.cur.dstStoreID: ", zap.Any("bs.cur.dstStoreID", bs.cur.dstStoreID))
+	log.Info("len(bs.stLoadDetail): ", zap.Any("len(bs.stLoadDetail)", len(bs.stLoadDetail)))
 	dstLd := bs.stLoadDetail[bs.cur.dstStoreID].LoadPred.max()
 	peer := bs.cur.srcPeerStat
 	rank := int64(0)
