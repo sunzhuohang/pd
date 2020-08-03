@@ -20,7 +20,6 @@ import (
 	"reflect"
 	"sort"
 	"strings"
-	"time"
 	"unsafe"
 
 	"github.com/gogo/protobuf/proto"
@@ -604,36 +603,37 @@ func (r *RegionsInfo) GetRegion(regionID uint64) *RegionInfo {
 
 // SetRegion sets the RegionInfo with regionID
 func (r *RegionsInfo) SetRegion(region *RegionInfo) []*RegionInfo {
-	rwBytesTotalarr := GetSplitRegionRwByte()
-	overlaps := r.tree.getOverlaps(region)
-	if rwb, ok := rwBytesTotalarr[region.GetID()]; ok {
-		region.rwBytesTotal = rwb
-		delete(rwBytesTotalarr, region.GetID())
-	} else {
-		var sum uint64
-		sum = 0
+	/*
+		rwBytesTotalarr := GetSplitRegionRwByte()
+		overlaps := r.tree.getOverlaps(region)
+		if rwb, ok := rwBytesTotalarr[region.GetID()]; ok {
+			region.rwBytesTotal = rwb
+			delete(rwBytesTotalarr, region.GetID())
+		} else {
+			var sum uint64
+			sum = 0
+			for _, reg := range overlaps {
+				rInfo := r.regions.Get(reg.meta.GetId())
+				sum = sum + rInfo.rwBytesTotal
+			}
+			region.rwBytesTotal = sum
+		}
+		ok := false
 		for _, reg := range overlaps {
-			rInfo := r.regions.Get(reg.meta.GetId())
-			sum = sum + rInfo.rwBytesTotal
+			regInfo := r.regions.Get(reg.meta.GetId())
+			if regInfo != nil && regInfo.interval != nil && (time.Unix(int64(regInfo.interval.StartTimestamp), 0).Hour() < time.Unix(int64(region.interval.StartTimestamp), 0).Hour()) {
+				ok = true
+			}
 		}
-		region.rwBytesTotal = sum
-	}
-	ok := false
-	for _, reg := range overlaps {
-		regInfo := r.regions.Get(reg.meta.GetId())
-		if regInfo != nil && regInfo.interval != nil && (time.Unix(int64(regInfo.interval.StartTimestamp), 0).Hour() < time.Unix(int64(region.interval.StartTimestamp), 0).Hour()) {
-			ok = true
+		if ok {
+			region.rwBytesTotal = region.rwBytesTotal / 2
 		}
-	}
-	if ok {
-		region.rwBytesTotal = region.rwBytesTotal / 2
-	}
+	*/
 	if region.approximateSize > 0 {
-		region.rwBytesTotal = region.rwBytesTotal + (region.readBytes + region.writtenBytes)
+		region.rwBytesTotal = region.rwBytesTotal + (region.readBytes+region.writtenBytes)/2
 	} else {
 		region.rwBytesTotal = 0
 	}
-
 
 	if origin := r.regions.Get(region.GetID()); origin != nil {
 		if !bytes.Equal(origin.GetStartKey(), region.GetStartKey()) || !bytes.Equal(origin.GetEndKey(), region.GetEndKey()) {
