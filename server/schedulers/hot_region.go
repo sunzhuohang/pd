@@ -457,8 +457,14 @@ func getTopK(regions []*core.RegionInfo) []uint64 {
 			continue
 		}
 		indexData := (maxrw - data) / segment
-		log.Info("data: ", zap.Any("data", data))
-		log.Info("indexData: ", zap.Any("indexData", indexData))
+		if int(indexData) > len(regions) {
+			log.Info("maxrw: ", zap.Any("maxrw", maxrw))
+			log.Info("minrw: ", zap.Any("minrw", minrw))
+			log.Info("segment: ", zap.Any("segment", segment))
+			log.Info("len of HotDegree: ", zap.Any("len(HotDegree)", len(HotDegree)))
+			log.Info("data: ", zap.Any("data", data))
+			log.Info("indexData: ", zap.Any("indexData", indexData))
+		}
 		HotDegree[indexData].count++
 		HotDegree[indexData].regionID = append(HotDegree[indexData].regionID, v.GetID())
 	}
