@@ -475,7 +475,7 @@ LOOP:
 			}
 		}
 	}
-	//log.Info("GetTopK", zap.Any("TopK regionIDs", retRegionID))
+	log.Info("GetTopK", zap.Any("TopK regionIDs", retRegionID))
 	return retRegionID
 }
 
