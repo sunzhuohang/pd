@@ -397,9 +397,9 @@ func filterHotPeers(
 	regionIDs := getTopK(regions)
 
 	for _, peer := range peers {
-		if (kind == core.LeaderKind && !peer.IsLeader()) ||
+		if ((kind == core.LeaderKind && !peer.IsLeader()) ||
 			peer.HotDegree < minHotDegree ||
-			isHotPeerFiltered(peer, hotRegionThreshold, hotPeerFilterTy) &&
+			isHotPeerFiltered(peer, hotRegionThreshold, hotPeerFilterTy)) &&
 				!(isExists(peer.RegionID, regionIDs) && (kind == core.LeaderKind && peer.IsLeader())) {
 			continue
 		}
@@ -409,7 +409,7 @@ func filterHotPeers(
 	for _, id := range ret {
 		chooseIDs = append(chooseIDs, id.RegionID)
 	}
-	//log.Info("GetTopK", zap.Any("ChooseIDs", chooseIDs))
+	log.Info("GetTopK", zap.Any("ChooseIDs", chooseIDs))
 	return ret
 }
 
@@ -920,8 +920,8 @@ func (bs *balanceSolver) pickDstStores(filters []filter.Filter, candidates []*co
 // See the comments of `solution.progressiveRank` for more about progressive rank.
 func (bs *balanceSolver) calcProgressiveRank() {
 	srcLd := bs.stLoadDetail[bs.cur.srcStoreID].LoadPred.min()
-	log.Info("bs.cur.dstStoreID: ", zap.Any("bs.cur.dstStoreID", bs.cur.dstStoreID))
-	log.Info("len(bs.stLoadDetail): ", zap.Any("len(bs.stLoadDetail)", len(bs.stLoadDetail)))
+	//log.Info("bs.cur.dstStoreID: ", zap.Any("bs.cur.dstStoreID", bs.cur.dstStoreID))
+	//log.Info("len(bs.stLoadDetail): ", zap.Any("len(bs.stLoadDetail)", len(bs.stLoadDetail)))
 	dstLd := bs.stLoadDetail[bs.cur.dstStoreID].LoadPred.max()
 	peer := bs.cur.srcPeerStat
 	rank := int64(0)
