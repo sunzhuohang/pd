@@ -400,7 +400,7 @@ func filterHotPeers(
 		if ((kind == core.LeaderKind && !peer.IsLeader()) ||
 			peer.HotDegree < minHotDegree ||
 			isHotPeerFiltered(peer, hotRegionThreshold, hotPeerFilterTy)) &&
-				!(isExists(peer.RegionID, regionIDs) && (kind == core.LeaderKind && peer.IsLeader())) {
+			!(isExists(peer.RegionID, regionIDs) && (kind != core.LeaderKind || peer.IsLeader())) {
 			continue
 		}
 		ret = append(ret, peer)
