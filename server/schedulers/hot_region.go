@@ -328,10 +328,12 @@ func summaryStoresLoad(
 				hotPeers = append(hotPeers, peer.Clone())
 			}
 			// Use sum of hot peers to estimate leader-only byte rate.
+			/*
 			if kind == core.LeaderKind && rwTy == write {
 				byteRate = byteSum
 				keyRate = keySum
 			}
+			 */
 
 			// Metric for debug.
 			{
