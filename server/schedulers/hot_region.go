@@ -430,7 +430,7 @@ func filterHotPeers(
 		chooseIDs = append(chooseIDs, id.RegionID)
 	}
 	//log.Info("GetTopK", zap.Any("ChooseIDs", chooseIDs))
-	return ret
+	return ret1
 }
 
 type HotRegionTable struct {
