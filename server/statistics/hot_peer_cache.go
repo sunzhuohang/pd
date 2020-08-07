@@ -316,7 +316,7 @@ func (f *hotPeerCache) updateHotPeerStat(newItem, oldItem *HotPeerStat, storesSt
 		}
 	} else {
 		if !isHot {
-			return nil
+			//return nil
 		}
 		newItem.rollingByteRate = NewMedianFilter(rollingWindowsSize)
 		newItem.rollingKeyRate = NewMedianFilter(rollingWindowsSize)
