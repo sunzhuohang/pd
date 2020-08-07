@@ -395,6 +395,8 @@ func filterHotPeers(
 	regions []*core.RegionInfo,
 ) []*statistics.HotPeerStat {
 	ret := make([]*statistics.HotPeerStat, 0)
+	ret1 := make([]*statistics.HotPeerStat, 0)
+	ret2 := make([]*statistics.HotPeerStat, 0)
 	regionIDs := getTopK(regions)
 
 	for _, peer := range peers {
@@ -406,11 +408,28 @@ func filterHotPeers(
 		}
 		ret = append(ret, peer)
 	}
+	for _, peer := range peers {
+		if !(isExists(peer.RegionID, regionIDs) && (kind != core.LeaderKind || peer.IsLeader())) {
+			continue
+		}
+		ret1 = append(ret1, peer)
+	}
+	for _, peer := range peers {
+		if !(isExists(peer.RegionID, regionIDs)) {
+			continue
+		}
+		ret2 = append(ret2, peer)
+	}
+	log.Info("len of peers: ", zap.Any("len(peers)", len(peers)))
+	log.Info("len of ret: ", zap.Any("len(ret)", len(ret)))
+	log.Info("len of ret1: ", zap.Any("len(ret1)", len(ret1)))
+	log.Info("len of ret2: ", zap.Any("len(ret2)", len(ret2)))
+
 	var chooseIDs []uint64
 	for _, id := range ret {
 		chooseIDs = append(chooseIDs, id.RegionID)
 	}
-	log.Info("GetTopK", zap.Any("ChooseIDs", chooseIDs))
+	//log.Info("GetTopK", zap.Any("ChooseIDs", chooseIDs))
 	return ret
 }
 
@@ -473,7 +492,8 @@ LOOP:
 			}
 		}
 	}
-	log.Info("GetTopK", zap.Any("TopK regionIDs", retRegionID))
+	//log.Info("GetTopK", zap.Any("TopK regionIDs", retRegionID))
+	log.Info("GetTopK", zap.Any("Len of TopK regionIDs", len(retRegionID)))
 	return retRegionID
 }
 
