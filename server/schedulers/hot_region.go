@@ -195,6 +195,7 @@ func (h *hotScheduler) prepareForBalance(cluster opt.Cluster) {
 
 	storesStat := cluster.GetStoresStats()
 	regions := cluster.GetRegions()
+	log.Info("len of regions: ", zap.Any("len(regions)", len(regions)))
 
 	minHotDegree := cluster.GetHotRegionCacheHitsThreshold()
 	{ // update read statistics
@@ -447,9 +448,6 @@ func getTopK(regions []*core.RegionInfo) []uint64 {
 	HotDegree := make([]HotRegionTable, len(regions)+10)
 	for index, v := range regions {
 		data := tmp[index]
-		if data == 0 {
-			continue
-		}
 		indexData := (maxrw - data) / segment
 		if int(indexData) > len(regions) {
 			log.Info("maxrw: ", zap.Any("maxrw", maxrw))
@@ -475,7 +473,6 @@ LOOP:
 			}
 		}
 	}
-	log.Info("len of regions: ", zap.Any("len(regions)", len(regions)))
 	log.Info("GetTopK", zap.Any("TopK regionIDs", retRegionID))
 	return retRegionID
 }
