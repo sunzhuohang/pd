@@ -293,9 +293,10 @@ func (f *hotPeerCache) isRegionHotWithPeer(region *core.RegionInfo, peer *metapb
 }
 
 func (f *hotPeerCache) updateHotPeerStat(newItem, oldItem *HotPeerStat, storesStats *StoresStats) *HotPeerStat {
-	thresholds := f.calcHotThresholds(storesStats, newItem.StoreID)
-	isHot := newItem.ByteRate >= thresholds[byteDim] ||
-		newItem.KeyRate >= thresholds[keyDim]
+	//thresholds := f.calcHotThresholds(storesStats, newItem.StoreID)
+	//isHot := newItem.ByteRate >= thresholds[byteDim] ||
+		//newItem.KeyRate >= thresholds[keyDim]
+	isHot := true
 
 	if newItem.needDelete {
 		return newItem
@@ -316,7 +317,7 @@ func (f *hotPeerCache) updateHotPeerStat(newItem, oldItem *HotPeerStat, storesSt
 		}
 	} else {
 		if !isHot {
-			//return nil
+			return nil
 		}
 		newItem.rollingByteRate = NewMedianFilter(rollingWindowsSize)
 		newItem.rollingKeyRate = NewMedianFilter(rollingWindowsSize)
