@@ -363,6 +363,7 @@ func summaryStoresLoad(
 		}
 	}
 	storeLen := float64(len(storeByteRate))
+	log.Info("storeLen: ", zap.Any("storeLen", storeLen))
 
 	for id, detail := range loadDetail {
 		byteExp := allByteSum / storeLen
@@ -422,10 +423,10 @@ func filterHotPeers(
 		}
 		ret2 = append(ret2, peer)
 	}
-	log.Info("len of peers: ", zap.Any("len(peers)", len(peers)))
-	log.Info("len of ret: ", zap.Any("len(ret)", len(ret)))
-	log.Info("len of ret1: ", zap.Any("len(ret1)", len(ret1)))
-	log.Info("len of ret2: ", zap.Any("len(ret2)", len(ret2)))
+	//log.Info("len of peers: ", zap.Any("len(peers)", len(peers)))
+	//log.Info("len of ret: ", zap.Any("len(ret)", len(ret)))
+	//log.Info("len of ret1: ", zap.Any("len(ret1)", len(ret1)))
+	//log.Info("len of ret2: ", zap.Any("len(ret2)", len(ret2)))
 
 	var chooseIDs []uint64
 	for _, id := range ret {
@@ -495,7 +496,7 @@ LOOP:
 		}
 	}
 	//log.Info("GetTopK", zap.Any("TopK regionIDs", retRegionID))
-	log.Info("GetTopK", zap.Any("Len of TopK regionIDs", len(retRegionID)))
+	//log.Info("GetTopK", zap.Any("Len of TopK regionIDs", len(retRegionID)))
 	return retRegionID
 }
 
