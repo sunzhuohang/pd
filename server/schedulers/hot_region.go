@@ -210,7 +210,7 @@ func (h *hotScheduler) prepareForBalance(cluster opt.Cluster) {
 			regionRead,
 			minHotDegree,
 			hotRegionThreshold,
-			read, core.LeaderKind, mixed, regions)
+			read, core.LeaderKind, mixed, regions, cluster)
 	}
 
 	{ // update write statistics
@@ -225,7 +225,7 @@ func (h *hotScheduler) prepareForBalance(cluster opt.Cluster) {
 			regionWrite,
 			minHotDegree,
 			hotRegionThreshold,
-			write, core.LeaderKind, mixed, regions)
+			write, core.LeaderKind, mixed, regions, cluster)
 
 		h.stLoadInfos[writePeer] = summaryStoresLoad(
 			storeByte,
@@ -234,7 +234,7 @@ func (h *hotScheduler) prepareForBalance(cluster opt.Cluster) {
 			regionWrite,
 			minHotDegree,
 			hotRegionThreshold,
-			write, core.RegionKind, mixed, regions)
+			write, core.RegionKind, mixed, regions, cluster)
 	}
 }
 
@@ -307,6 +307,7 @@ func summaryStoresLoad(
 	kind core.ResourceKind,
 	hotPeerFilterTy hotPeerFilterType,
 	regions []*core.RegionInfo,
+	cluster opt.Cluster,
 ) map[uint64]*storeLoadDetail {
 	loadDetail := make(map[uint64]*storeLoadDetail, len(storeByteRate))
 	allByteSum := 0.0
@@ -360,7 +361,9 @@ func summaryStoresLoad(
 			HotPeers: hotPeers,
 		}
 	}
-	storeLen := float64(len(storeByteRate))
+	unhealthystore := getUnhealthyStores(cluster)
+	storeLen := float64(len(storeByteRate)-len(unhealthystore))
+
 	log.Info("storeLen: ", zap.Any("storeLen", storeLen))
 
 	for id, detail := range loadDetail {
@@ -397,7 +400,6 @@ func filterHotPeers(
 ) []*statistics.HotPeerStat {
 	ret := make([]*statistics.HotPeerStat, 0)
 	ret1 := make([]*statistics.HotPeerStat, 0)
-	ret2 := make([]*statistics.HotPeerStat, 0)
 	regionIDs := getTopK(regions)
 
 	for _, peer := range peers {
@@ -415,16 +417,9 @@ func filterHotPeers(
 		}
 		ret1 = append(ret1, peer)
 	}
-	for _, peer := range peers {
-		if !(isExists(peer.RegionID, regionIDs)) {
-			continue
-		}
-		ret2 = append(ret2, peer)
-	}
 	//log.Info("len of peers: ", zap.Any("len(peers)", len(peers)))
 	//log.Info("len of ret: ", zap.Any("len(ret)", len(ret)))
 	//log.Info("len of ret1: ", zap.Any("len(ret1)", len(ret1)))
-	//log.Info("len of ret2: ", zap.Any("len(ret2)", len(ret2)))
 
 	var chooseIDs []uint64
 	for _, id := range ret {
@@ -621,9 +616,6 @@ func (bs *balanceSolver) init() {
 		bs.stLoadDetail = bs.sche.stLoadInfos[writeLeader]
 	case readLeader:
 		bs.stLoadDetail = bs.sche.stLoadInfos[readLeader]
-	}
-	for _, id := range getUnhealthyStores(bs.cluster) {
-		delete(bs.stLoadDetail, id)
 	}
 
 	bs.maxSrc = &storeLoad{}
